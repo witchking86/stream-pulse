@@ -32,9 +32,10 @@
  *
  * SETUP
  *  1. Install Übersicht: https://tracesof.net/uebersicht/
- *  2. PLEX_URL / PLEX_TOKEN below are already filled in for you.
+ *  2. PLEX_URL has a working example default; PLEX_TOKEN must be
+ *       your own — see the ">>> CHANGE THIS <<<" marker below.
  *  3. Copy this file into:
- *       ~/Library/Application Support/Übersicht/widgets/plex-status.jsx
+ *       ~/Library/Application Support/Übersicht/widgets/streampulse.jsx
  */
 
 import { run } from "uebersicht";

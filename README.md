@@ -6,7 +6,7 @@ A live status widget for your Plex Media Server, built for macOS.
 
 Two versions live in this folder:
 
-- **`uebersicht/streampulse.jsx`** — the recommended one. Now Playing and
+- **`uebersicht/streampulse.example.jsx`** — the recommended one. Now Playing and
   system stats refresh every couple of seconds; requires the free
   Übersicht app.
 - **`App/`, `WidgetExtension/`, `Shared/`** — a native WidgetKit desktop
@@ -75,14 +75,15 @@ system widget rather than the fast-refresh, fully interactive one.
      same widget code, just packaged for a direct download without
      needing git. Skip to step 4 and use that folder instead of the
      file path shown there.
-   - **Or clone the repo** and use `uebersicht/streampulse.jsx`
-     directly — same code, useful if you also want the source handy
-     for making your own edits.
+   - **Or clone the repo** and use `uebersicht/streampulse.example.jsx`
+     — same code, useful if you also want the source handy for making
+     your own edits. Copy it rather than editing in place (it's
+     tracked in git, and your real Plex token shouldn't be).
 
 4. **Fill in your Plex info** — open the widget file (`index.jsx` if
-   you downloaded the release, or `uebersicht/streampulse.jsx` if you
-   cloned) in any text editor and fill in the two constants near the
-   top:
+   you downloaded the release, or your copy of
+   `uebersicht/streampulse.example.jsx` if you cloned) in any text
+   editor and fill in the two constants near the top:
    ```js
    const PLEX_URL = "http://192.168.1.50:32400"; // your Plex server's local URL
    const PLEX_TOKEN = "YOUR_TOKEN_HERE";          // your X-Plex-Token
@@ -95,7 +96,7 @@ system widget rather than the fast-refresh, fully interactive one.
      folder into `~/Library/Application Support/Übersicht/widgets/`.
    - From a clone:
      ```
-     cp "uebersicht/streampulse.jsx" "$HOME/Library/Application Support/Übersicht/widgets/"
+     cp "uebersicht/streampulse.example.jsx" "$HOME/Library/Application Support/Übersicht/widgets/streampulse.jsx"
      ```
    (Cmd+Shift+G in Finder is the fastest way to paste that path and
    jump straight there.)
@@ -136,7 +137,7 @@ clicking through target setup:
 1. `brew install xcodegen` (one-time).
 2. `cp Shared/PlexConfig.swift.example Shared/PlexConfig.swift`, then
    fill in your real Plex server URL and X-Plex-Token in that file
-   (same as `uebersicht/streampulse.jsx` — to find your token: open the
+   (same as `uebersicht/streampulse.example.jsx` — to find your token: open the
    Plex web app, pick any item, "Get Info" → "View XML", copy the
    `X-Plex-Token=...` value from the URL bar).
 3. From the repo root: `xcodegen generate` — creates
