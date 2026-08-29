@@ -1,4 +1,4 @@
-# StreamPulse
+# <img width="305" height="102" alt="image" src="https://github.com/user-attachments/assets/a74f9b96-120e-4236-8bc8-3ba992eccdde" />
 
 A live status widget for your Plex Media Server, built for macOS.
 
