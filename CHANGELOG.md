@@ -32,11 +32,61 @@ tied to one commit.
 - **Übersicht's JSX compiler has no `React.Fragment` in scope** — a bare
   `<>...</>` shorthand silently breaks the entire widget rather than
   erroring cleanly. Hit and fixed early on (see the 1:03 PM entry below).
+- **Plex rewrites a transcoding session's own Media/Part/Stream fields to
+  describe the transcode OUTPUT, not the source file** — confirmed via a
+  live session dump: `height`, `videoResolution`, and `audioCodec` all
+  reported the transcoded values (e.g. `720p`/`ac3`) even on a genuinely
+  1080p/EAC3 source. The only place the source survives is the video
+  Stream's own `displayTitle` text (e.g. `"1080p (H.264)"`) and
+  `TranscodeSession.sourceAudioCodec`. See 2026-08-28 9:43 PM below.
+- **Real credential files (`streampulse.jsx`, `PlexConfig.swift`) now
+  live entirely outside this repo folder**, not just gitignored inside
+  it — a stray copy of `streampulse.jsx` ended up committed once despite
+  the ignore rule, which only a file never being physically present in
+  the repo directory fully rules out. See 2026-08-28 11:47 PM below.
 
 ---
 
 ## 2026-08-28
 
+- **11:47 PM** — `[Changed]` Moved the real `PlexConfig.swift` out of the
+  repo entirely (now maintained outside the repo folder, alongside the
+  real `streampulse.jsx`); stopped tracking `streampulse.widget.zip` and
+  two unused gallery images (`screenshot.png`,
+  `StreamPulse v1.2.png`) — the zip belongs on the GitHub Release instead
+  of committed to history.
+- **11:34 PM** — `[Docs]` Swapped the README's gallery image.
+- **11:28 PM** — `[Changed]` Reset the repository's git history to a
+  clean baseline as a precaution after a real credentials file was
+  briefly committed — see the Noteworthy entry above.
+- **9:43 PM** — `[Fixed]` The resolution/audio badge ("1080p → 720p"
+  style) actually shows the original quality again instead of just the
+  currently-streamed one — root cause and fix in the Noteworthy entry
+  above.
+- **9:23 PM** — `[Added]` Hide button for individual Recently Added
+  categories (Movies, TV Shows, Music, Screeners, etc.), mirroring the
+  existing top-level section hide/show pattern — hidden categories
+  collect in the same "Hidden: …" footer chip row and can be restored
+  with a click.
+- **7:50 PM** — `[Fixed]` Recently Added's poster glow was bleeding into
+  the next (hidden, paged-out) poster past the visible 4 — retuned the
+  carousel viewport's clip padding so it's cut off before that neighbor's
+  glow shows.
+- **7:25 PM** — `[Fixed]` Now Playing tile glow was getting clipped at
+  the widget's left/right edges; padding now matches the widget's own
+  side padding so the glow fades out naturally instead of hitting a hard
+  edge.
+- **7:10 PM** — `[Changed]` Drag-to-move handle now stays hidden until
+  the widget is hovered, matching the existing resize-handle behavior.
+- **6:50 PM** — `[Changed]` Avatar repositioned to an absolute corner
+  badge (top-right of the tile) sized independent of tile height; "Added
+  on" date moved next to the Stop button instead.
+- **6:25 PM** — `[Added]` User's Plex avatar shown on Now Playing tiles.
+- **6:15 PM** — `[Added]` "Added on <date>" shown inline with the title
+  on Now Playing tiles (e.g. "Added on February 4th, 2026").
+- **6:10 PM** — `[Added]` Resolution and audio format shown inline after
+  the Direct Play/Transcoding badge — e.g. "1080p → 720p" when the
+  actual stream is downscaled from the source.
 - **12:49 AM** — `[Docs]` README rewritten to actually describe the
   Übersicht widget's full interactive feature set: Recently Added paging
   (`‹ ›` through the last 20 per category) and category reordering
