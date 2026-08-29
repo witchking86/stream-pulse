@@ -12,6 +12,11 @@ debug_session.json
 .plex_widget_debug_session.json
 .claude_delete_test.txt
 
+# Built release artifact -- attach it to GitHub Releases instead of
+# committing it here, so every rebuild doesn't add a new binary blob to
+# the repo's history.
+streampulse.widget.zip
+
 # XcodeGen-generated -- regenerate with `xcodegen generate` (see project.yml)
 *.xcodeproj/
 App/Info.plist
