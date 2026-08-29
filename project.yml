@@ -1,0 +1,105 @@
+# XcodeGen project spec for StreamPulse's native macOS widget.
+#
+# Generates a ready-to-run Xcode project with:
+#   - "StreamPulse" app target (App/ + Shared/) -- the settings window
+#     where you paste your Plex URL/token.
+#   - "StreamPulseWidget" widget extension target (WidgetExtension/ +
+#     Shared/) -- the actual desktop/Notification-Center widget.
+#   - Your Plex URL/token live directly in Shared/PlexConfig.swift
+#     (gitignored, copy from PlexConfig.swift.example) -- no App Group /
+#     shared container between the two targets, so there's no signing
+#     capability to provision beyond plain sandboxed network access.
+#
+# One-time setup:
+#   1. brew install xcodegen        (needs your own Terminal -- network)
+#   2. cp Shared/PlexConfig.swift.example Shared/PlexConfig.swift, fill
+#      in your real Plex URL/token.
+#   3. cd into this folder, run:    xcodegen generate
+#   4. Open the generated StreamPulse.xcodeproj in Xcode.
+#   5. Signing & Capabilities on BOTH targets -> set your own Team
+#      (any free personal Apple ID works for local use).
+#   6. Run the "StreamPulse" scheme to sanity-check the connection.
+#   7. Right-click your desktop (or open Notification Center) -> Edit
+#      Widgets -> find "StreamPulse" -> drag it onto your desktop.
+#
+# The bundle IDs below are placeholder-style (com.example.streampulse)
+# -- fine for local personal use, no real domain required.
+
+name: StreamPulse
+
+options:
+  bundleIdPrefix: com.example.streampulse
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.2"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: YES
+    # So Xcode opens with "Automatically manage signing" already checked
+    # on both targets -- you just need to pick your Team in the dropdown
+    # (Xcode > Settings > Accounts must have your Apple ID added first).
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  StreamPulse:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: App
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.streampulse.app
+        PRODUCT_NAME: StreamPulse
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: StreamPulse
+        LSApplicationCategoryType: public.app-category.utilities
+        NSHumanReadableCopyright: ""
+    entitlements:
+      path: App/StreamPulse.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    dependencies:
+      - target: StreamPulseWidget
+        embed: true
+
+  StreamPulseWidget:
+    type: app-extension
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: WidgetExtension
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.streampulse.app.widget
+        PRODUCT_NAME: StreamPulseWidget
+        SKIP_INSTALL: YES
+    info:
+      path: WidgetExtension/Info.plist
+      properties:
+        CFBundleDisplayName: StreamPulse Widget
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: WidgetExtension/StreamPulseWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+
+schemes:
+  StreamPulse:
+    build:
+      targets:
+        StreamPulse: all
+    run:
+      config: Debug

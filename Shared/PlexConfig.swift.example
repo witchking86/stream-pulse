@@ -1,0 +1,18 @@
+import Foundation
+
+// Your Plex server's local URL and X-Plex-Token, hardcoded directly here --
+// same approach as the Uebersicht widget (uebersicht/streampulse.jsx). Both
+// the StreamPulse app and the widget extension read these same compiled-in
+// constants directly, so there's no App Group / shared container needed
+// between them, and no Xcode signing/provisioning fight over one.
+//
+// SETUP: copy this file to PlexConfig.swift (gitignored) in this same
+// folder, then fill in your real values there:
+//   cp Shared/PlexConfig.swift.example Shared/PlexConfig.swift
+//
+// To find your token: open the Plex web app, pick any item, "Get Info" ->
+// "View XML", and copy the X-Plex-Token=... value from the URL bar.
+enum PlexConfig {
+    static let serverURL = "http://192.168.1.50:32400"
+    static let token = "YOUR_TOKEN_HERE"
+}
