@@ -2,7 +2,7 @@
 
 A live status widget for your Plex Media Server, built for macOS.
 
-**Version 1.2** · Created by **Witchking86**.
+**Version 1.3** · Created by **Witchking86**.
 
 Two versions live in this folder:
 

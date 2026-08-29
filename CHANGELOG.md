@@ -47,6 +47,47 @@ tied to one commit.
 
 ---
 
+## 2026-08-29
+
+- **5:10 PM** — `[Changed]` Bumped to version 1.3; synced
+  `uebersicht/streampulse.example.jsx` with the live widget (placeholder
+  credentials only, as always) and rebuilt `streampulse.widget.zip` from
+  the synced file.
+- **4:55 PM** — `[Changed]` Move handle relocated to the widget's true
+  top-right corner (absolute-positioned, mirroring the existing
+  bottom-right resize handle); the StreamPulse logo/heartbeat group now
+  sits flush against the right edge of the header row instead of
+  floating between the title and streaming count.
+- **4:40 PM** — `[Changed]` Bigger Plex avatar in the header; the
+  connected server's name now renders in a distinct rounded font instead
+  of the default system font.
+- **4:20 PM** — `[Fixed]` Debounced the "Can't reach server" error
+  banner (a single tracked timer reset on every new failure instead of
+  each 2-second poll scheduling its own independent auto-clear) — it no
+  longer flickers on/off throughout an ongoing outage.
+- **4:00 PM** — `[Added]` Offline state now shows a red flatline
+  heartbeat with the same traveling-pulse sweep animation used for the
+  connected state, instead of a static line.
+- **3:30 PM** — `[Fixed]` Dropped JSX fragment shorthand (`<>...</>`)
+  from the header and About-panel heartbeat SVGs — Übersicht's compiler
+  has no `React.Fragment` in scope, the same class of bug hit and fixed
+  earlier in the project's history (see 2026-08-27, 1:03 PM).
+- **3:00 PM** — `[Changed]` Simplified the header branding down to the
+  StreamPulse wordmark plus a single animated heartbeat-monitor line
+  (removed an earlier three-dots-and-bar decoration), resized and
+  visually connected to the wordmark's trailing "e".
+- **2:30 PM** — `[Added]` About panel — click the logo to see the
+  installed version, license, and a link back to this repo; matches the
+  widget's own chosen background color/opacity instead of darkening the
+  widget behind it.
+- **2:00 PM** — `[Changed]` Replaced the Plex logo in the header (and
+  About panel) with StreamPulse's own logo, animated with a moving
+  heartbeat-monitor line at the end of the wordmark.
+- **1:30 PM** — `[Fixed]` Background-color swatches and the opacity
+  slider now share a guaranteed common left edge (CSS grid instead of
+  two independently-sized flex rows) instead of only coincidentally
+  lining up.
+
 ## 2026-08-28
 
 - **11:47 PM** — `[Changed]` Moved the real `PlexConfig.swift` out of the
