@@ -52,7 +52,7 @@ reordering, or update badges. It's there for people who want a "real"
 system widget rather than the fast-refresh, fully interactive one.
 
 ---
-<img width="1106" height="1422" alt="screenshot" src="https://github.com/user-attachments/assets/7ed3a62c-db03-4094-8b20-2b00fa47865b" />
+<img width="1106" height="1422" alt="screenshot" src="https://github.com/user-attachments/assets/347b538f-8c2b-4cf9-9d96-ff1d797dae84" />
 ---
 
 ## Übersicht widget (fast refresh) — recommended
