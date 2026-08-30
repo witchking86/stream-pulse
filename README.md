@@ -52,7 +52,7 @@ reordering, or update badges. It's there for people who want a "real"
 system widget rather than the fast-refresh, fully interactive one.
 
 ---
-<img width="1117" height="1408" alt="StreamPulse v1 2" src="https://github.com/user-attachments/assets/6ec04f11-c592-469b-a542-8a2c0db1a67f" />
+<img width="1106" height="1422" alt="screenshot" src="https://github.com/user-attachments/assets/7ed3a62c-db03-4094-8b20-2b00fa47865b" />
 ---
 
 ## Übersicht widget (fast refresh) — recommended
