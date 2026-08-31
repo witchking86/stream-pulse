@@ -89,6 +89,8 @@ system widget rather than the fast-refresh, fully interactive one.
      ```
    (Cmd+Shift+G in Finder is the fastest way to paste that path and
    jump straight there.)
+---
+<img width="722" height="204" alt="Login" src="https://github.com/user-attachments/assets/bc7b6aa4-c3fb-4dd4-888d-d186ca5fc873" />
 
 5. **Sign in with Plex** — Übersicht picks up the widget automatically
    (if not, click its menu bar icon -> Refresh). It shows up near the
