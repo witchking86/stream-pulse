@@ -71,7 +71,7 @@ system widget rather than the fast-refresh, fully interactive one.
    - **Quickest — download the release:** grab
      [`streampulse.widget.zip`](../../releases/latest) from the
      [Releases page](../../releases), unzip it, and you'll have a
-     `streampulse.widget` folder containing `index.jsx` — that's the
+     `streampulse.widget` folder containing `StreamPulse.jsx` — that's the
      same widget code, just packaged for a direct download without
      needing git. Skip to step 4 and use that folder instead of the
      file path shown there.
