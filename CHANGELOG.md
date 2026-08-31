@@ -44,6 +44,52 @@ tied to one commit.
   it — a stray copy of `streampulse.jsx` ended up committed once despite
   the ignore rule, which only a file never being physically present in
   the repo directory fully rules out. See 2026-08-28 11:47 PM below.
+- **Übersicht widget: no more manual token entry.** Sign in with Plex
+  from the widget itself and it handles the rest — see 1.4's Noteworthy
+  note below and 2026-08-30 for the full list of sign-in changes.
+
+---
+
+## 2026-08-30
+
+- **[Changed]** Bumped to version 1.4; synced
+  `uebersicht/streampulse.example.jsx` with the live widget (placeholder
+  credentials only, as always) and rebuilt `streampulse.widget.zip` from
+  the synced file.
+- **[Added]** Sign in with Plex directly from the widget — click the
+  logo at first launch, approve in the browser tab that opens, and the
+  widget fills in your token and finds your server itself. No more
+  copying an `X-Plex-Token` out of a browser URL bar; manually setting
+  `PLEX_TOKEN` in the source still works if you'd rather skip sign-in.
+- **[Added]** The sign-in screen's logo/heartbeat shows red until a
+  real connection succeeds — a flat red line while idle or waiting on
+  approval, the same traveling-pulse sweep as the connected state (in
+  red) once signed in but still checking, and only turns to the normal
+  amber "online" animation after the server is confirmed reachable. On
+  success it shows a "Connected!" message with a short quote, then
+  drops into the widget on its own a few seconds later.
+- **[Added]** Detects Plex accounts that only have shared access to
+  someone else's server (no server of their own) and shows a clear "no
+  server found" message instead of leaving the widget stuck on a
+  generic, unexplained "Plex Offline".
+- **[Fixed]** Server name in the header now falls back to the name Plex
+  itself reports when `SERVER_DISPLAY_NAME` is left at its default
+  (`null`) — it could previously show blank even though the real name
+  was already being fetched.
+- **[Fixed]** The bandwidth graph's gridlines (20/40/60/80/100) were
+  getting painted over by the bars themselves at higher values; the
+  newest bar could also read as a near-zero flicker because it
+  represented a second Plex hadn't finished reporting yet. Both fixed —
+  gridlines always stay visible, and the graph's window is shifted back
+  one second so every bar shown is for a second that's actually
+  finished.
+- **[Changed]** Bandwidth values (both the live numbers and the graph)
+  now show combined bit- and byte-rate units together, e.g. `320 Kbps
+  (40.0 KB/s)` or `12.4 Mbps (1.6 MB/s)`, instead of just one unit.
+- **[Added]** A library that's actively being scanned shows a small
+  spinning indicator next to its name for the duration of the scan; the
+  manual scan button for that library hides itself while a scan is
+  already running instead of showing both at once.
 
 ---
 

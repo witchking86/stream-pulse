@@ -2,7 +2,7 @@
 
 A live status widget for your Plex Media Server, built for macOS.
 
-**Version 1.3** · Created by **Witchking86**.
+**Version 1.4** · Created by **Witchking86**.
 
 Two versions live in this folder:
 
@@ -80,18 +80,7 @@ system widget rather than the fast-refresh, fully interactive one.
      your own edits. Copy it rather than editing in place (it's
      tracked in git, and your real Plex token shouldn't be).
 
-4. **Fill in your Plex info** — open the widget file (`index.jsx` if
-   you downloaded the release, or your copy of
-   `uebersicht/streampulse.example.jsx` if you cloned) in any text
-   editor and fill in the two constants near the top:
-   ```js
-   const PLEX_URL = "http://192.168.1.50:32400"; // your Plex server's local URL
-   const PLEX_TOKEN = "YOUR_TOKEN_HERE";          // your X-Plex-Token
-   ```
-   To find your token: open the Plex web app, pick any item, "Get Info"
-   -> "View XML", and copy the `X-Plex-Token=...` value from the URL bar.
-
-5. **Put it in Übersicht's widgets folder**:
+4. **Put it in Übersicht's widgets folder**:
    - From the release download: drag the whole `streampulse.widget`
      folder into `~/Library/Application Support/Übersicht/widgets/`.
    - From a clone:
@@ -101,20 +90,40 @@ system widget rather than the fast-refresh, fully interactive one.
    (Cmd+Shift+G in Finder is the fastest way to paste that path and
    jump straight there.)
 
-6. Übersicht picks it up automatically. If not, click its menu bar icon
-   -> Refresh. The widget appears near the top-left of your screen by
-   default — drag it wherever you like (menu bar icon -> "Enable
-   click-through" toggles whether you can drag widgets around).
+5. **Sign in with Plex** — Übersicht picks up the widget automatically
+   (if not, click its menu bar icon -> Refresh). It shows up near the
+   top-left of your screen with a red "Sign in with Plex" prompt; click
+   it, a browser tab opens to Plex's own sign-in page, and once you
+   approve there the tab closes itself and the widget finds your server
+   automatically — no token to copy or paste anywhere. (Menu bar icon
+   -> "Enable click-through" toggles whether you can click/drag widgets
+   at all.)
 
-7. Now Playing and system stats poll every couple of seconds from then
+   Prefer not to use sign-in? You can still set your server info by
+   hand instead — open the widget file in any text editor and fill in:
+   ```js
+   let PLEX_URL = "http://192.168.1.50:32400"; // your Plex server's local URL
+   let PLEX_TOKEN = "YOUR_TOKEN_HERE";          // your X-Plex-Token
+   ```
+   To find your token: open the Plex web app, pick any item, "Get Info"
+   -> "View XML", and copy the `X-Plex-Token=...` value from the URL bar.
+
+6. Once signed in, drag the widget wherever you like on your desktop.
+   Now Playing and system stats poll every couple of seconds from then
    on; recently added and library counts refresh every 5 minutes. No
    restart needed when your server comes back online or a stream starts.
 
-### If it shows "Widget error"
-- Double check `PLEX_URL` and `PLEX_TOKEN` are filled in correctly (no
-  quotes missing, no trailing slash on the URL).
+### If it shows "Widget error" or won't sign in
 - Confirm `jq` is installed: run `jq --version` in Terminal.
-- Confirm your Mac can actually reach that URL: `curl http://<your-ip>:32400/identity` should return XML/JSON, not hang or error.
+- If you set `PLEX_URL`/`PLEX_TOKEN` by hand, double check they're
+  filled in correctly (no quotes missing, no trailing slash on the
+  URL), and that your Mac can reach that URL: `curl
+  http://<your-ip>:32400/identity` should return XML/JSON, not hang or
+  error.
+- If sign-in succeeds but the widget still shows "Plex Offline," make
+  sure the Plex account you signed in with actually owns a server (an
+  account with only shared/guest access to someone else's server won't
+  have one to connect to — the widget will tell you this directly).
 
 ---
 
@@ -170,14 +179,24 @@ filled-in `PlexConfig.swift`).
   right now — Plex doesn't expose a general "which Home users are
   currently online" API, so this is the closest honest signal.
 - **Local network only by default.** Both versions talk directly to
-  whatever `PLEX_URL` you give them. If that's a local LAN address,
+  whatever `PLEX_URL` you give them (or, for the Übersicht version,
+  whatever address sign-in resolves). If that's a local LAN address,
   they'll only show live data while your Mac is on the same network as
-  the Plex server — away from home, expect "Offline". Want it to also
-  work over the internet? Use your Plex remote-access URL instead
+  the Plex server — away from home, expect "Offline". Signing in
+  through the Übersicht version handles this for you automatically,
+  switching between your local and remote address as needed; on a
+  hand-filled `PLEX_URL` you'd use your Plex remote-access URL instead
   (`https://<your-id>.plex.direct:32400`-style).
-- Nothing is sent anywhere else — both versions talk straight to your
-  own Plex server, and your token only ever lives in the widget file on
-  your own Mac.
+- **Your data stays on your Mac.** StreamPulse talks directly to your
+  own Plex server (and, only during sign-in, to plex.tv to complete
+  the login) — there's no StreamPulse server in between collecting
+  anything. Signing in stores your Plex token in a small file in your
+  home folder (`~/.plex_widget_token` for the Übersicht version); if
+  you fill in `PLEX_TOKEN` by hand instead, it lives only in that copy
+  of the widget file. Either way nothing about your library, your
+  viewing activity, or your server ever leaves your own machine, and
+  you can sign out from the widget's About panel at any time to remove
+  the stored token.
 
 ## License
 

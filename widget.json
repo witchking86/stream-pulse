@@ -3,5 +3,5 @@
   "description": "Live-updating Plex Media Server status widget for your desktop — now playing with progress bars, recently added, bandwidth/CPU/RAM stats, and active stream counts.",
   "author": "Witchking86",
   "email": "witchking86@users.noreply.github.com",
-  "version": "1.3"
+  "version": "1.4"
 }
