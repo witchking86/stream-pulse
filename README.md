@@ -60,11 +60,6 @@ past that baseline:
   own background theme, and a fullscreen mode. Hide the main widget
   entirely and keep just the pop-out running if that's all you want on
   screen.
-- **Optional Sonarr integration** — fill in `SONARR_URL` and
-  `SONARR_API_KEY` the same way you'd set Plex credentials by hand, and
-  a new section shows missing episodes, the download queue with
-  progress bars, free disk space, and health warnings. Leave both blank
-  and the section simply doesn't appear.
 - **More ways to make it yours**: a confetti celebration for today's
   top streamer, background color/photo swatches (with the same
   "Locked" full-opacity option as the weather effects), an accent color
