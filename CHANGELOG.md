@@ -47,6 +47,76 @@ tied to one commit.
 - **Übersicht widget: no more manual token entry.** Sign in with Plex
   from the widget itself and it handles the rest — see 1.4's Noteworthy
   note below and 2026-08-30 for the full list of sign-in changes.
+- **This repo went quiet for several weeks while the Übersicht widget
+  kept developing locally.** Weather effects, the Streams pop-out
+  window, Sonarr integration, and everything else listed under
+  2026-09-19 below were all built and tested against the live widget
+  file without a matching commit here. That gap closes in one sync
+  rather than a backfilled commit per change, since this repo has no
+  record of the individual dates/times for that stretch — unlike every
+  other entry in this file, the 2026-09-19 list isn't in the order it
+  actually happened, just grouped by feature. Version 1.5.
+
+---
+
+## 2026-09-19
+
+- **[Changed]** Bumped to version 1.5; synced
+  `uebersicht/streampulse.example.jsx` with the live widget (placeholder
+  credentials only, as always) and rebuilt `streampulse.widget.zip` from
+  the synced file. See this entry's own note in Noteworthy above — this
+  closes a multi-week gap in one batch rather than one commit per
+  change.
+- **[Added]** Weather effects: snow, rain, and falling leaves, each
+  with an independent on/off toggle and its own amount slider, plus a
+  heavier "storm" mode for rain (and for snow and leaves) that's
+  noticeably thicker than the base effect.
+- **[Added]** Rain's storm mode adds occasional lightning — a bolt
+  roughly every 20–25 seconds, with around a 40% chance of striking
+  twice in quick succession instead of once, so the timing reads as
+  natural rather than mechanical.
+- **[Added]** A Halloween effect set: bats, cats, ghosts, and pumpkins,
+  each independently toggleable with its own amount slider.
+- **[Added]** A Christmas effect set: mistletoe, ornaments, gingerbread,
+  falling stars, and a flying Santa sleigh silhouette. Santa always
+  starts fully off-screen, alternates between entering from the left
+  and the right, and can be recolored via a swatch picker (Default,
+  Red, Green, Gold, White, Silver, Azure) since he's rendered as a
+  silhouette.
+- **[Added]** Every weather effect (and the background photo) has its
+  own "Locked" toggle, so it can stay at full opacity regardless of
+  where the widget's own transparency slider is set, instead of always
+  fading along with it.
+- **[Added]** A single Weather menu button in the widget's footer
+  controls holds every toggle/slider above.
+- **[Added]** Streams can pop out into their own window, separate from
+  the compact widget — resizable and draggable independently,
+  adjustable tile size and column count, filtering by playback
+  state/media type/user plus text search and sort, its own background
+  theme controls, a fullscreen mode, and a "send to back"/restore
+  toggle. The main widget can be hidden entirely while the pop-out
+  stays up.
+- **[Added]** Optional Sonarr integration (`SONARR_URL`/
+  `SONARR_API_KEY`, same manual-entry pattern as Plex) — a new section
+  shows missing episodes, the download queue with per-item progress
+  bars, free disk space, and health-check messages. Stays hidden
+  entirely when left unconfigured.
+- **[Added]** A confetti celebration on today's top streamer's tile,
+  toggleable from the Activity section.
+- **[Added]** Background color and photo customization — color
+  swatches, a custom photo upload, and its own "Locked" full-opacity
+  option.
+- **[Added]** An accent color picker with several presets — replaces
+  the hardcoded Plex orange everywhere in the widget (Now Playing's
+  progress bar, section dividers, the server name, Activity's stat
+  values, the avatar's online glow).
+- **[Added]** The server name in the header can be renamed to anything
+  (cosmetic only, doesn't touch the real Plex server), with a one-click
+  reset back to the real name.
+- **[Added]** A "Hide Logo" toggle for the header's StreamPulse
+  logo/heartbeat.
+- **[Added]** The whole dashboard can be hidden/restored independently
+  of the Streams pop-out, for a minimal on-screen footprint.
 
 ---
 

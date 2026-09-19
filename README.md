@@ -2,7 +2,7 @@
 
 A live status widget for your Plex Media Server, built for macOS.
 
-**Version 1.4** · Created by **Witchking86**.
+**Version 1.5** · Created by **Witchking86**.
 
 Two versions live in this folder:
 
@@ -45,6 +45,32 @@ past that baseline:
   restart or a Mac reboot.
 - A refresh/scan button on each library triggers a Plex library scan
   right from the widget, without opening Plex.
+- **Weather drifts across the widget**, on demand — snow, rain, and
+  falling leaves each get their own intensity slider and an optional
+  heavier "storm" mode (rain's storm brings the occasional double-flash
+  of lightning), alongside a Halloween set (bats, cats, ghosts,
+  pumpkins) and a Christmas set (a flying Santa silhouette you can
+  recolor, mistletoe, ornaments, gingerbread, falling stars). Everything
+  lives in one Weather menu, and each effect has its own "Locked" option
+  to stay at full opacity regardless of where the transparency slider
+  is set.
+- **Streams can pop out into their own window** — resizable, draggable,
+  and independent of the compact widget — with adjustable tile size and
+  column count, filtering by state/type/user plus search and sort, its
+  own background theme, and a fullscreen mode. Hide the main widget
+  entirely and keep just the pop-out running if that's all you want on
+  screen.
+- **Optional Sonarr integration** — fill in `SONARR_URL` and
+  `SONARR_API_KEY` the same way you'd set Plex credentials by hand, and
+  a new section shows missing episodes, the download queue with
+  progress bars, free disk space, and health warnings. Leave both blank
+  and the section simply doesn't appear.
+- **More ways to make it yours**: a confetti celebration for today's
+  top streamer, background color/photo swatches (with the same
+  "Locked" full-opacity option as the weather effects), an accent color
+  that replaces the hardcoded Plex orange everywhere in the widget, and
+  an editable server name if you'd rather not show your Plex server's
+  real one.
 
 The WidgetKit version stays deliberately simpler — read-only status on
 whatever schedule WidgetKit's system throttling allows, no paging,
@@ -114,6 +140,14 @@ system widget rather than the fast-refresh, fully interactive one.
    Now Playing and system stats poll every couple of seconds from then
    on; recently added and library counts refresh every 5 minutes. No
    restart needed when your server comes back online or a stream starts.
+
+7. **Sonarr (optional)** — open the widget file and fill in:
+   ```js
+   let SONARR_URL = "http://192.168.1.50:8989";
+   let SONARR_API_KEY = "YOUR_SONARR_API_KEY"; // Sonarr -> Settings -> General -> API Key
+   ```
+   Leave both blank (the default) and the Sonarr section just doesn't
+   show up.
 
 ### If it shows "Widget error" or won't sign in
 - Confirm `jq` is installed: run `jq --version` in Terminal.

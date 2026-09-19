@@ -32,11 +32,10 @@
  *
  * SETUP
  *  1. Install Übersicht: https://tracesof.net/uebersicht/
- *  2. Copy this file into:
+ *  2. PLEX_URL has a working example default; PLEX_TOKEN must be
+ *       your own — see the ">>> CHANGE THIS <<<" marker below.
+ *  3. Copy this file into:
  *       ~/Library/Application Support/Übersicht/widgets/streampulse.jsx
- *  3. Open the widget and click "Sign in with Plex" — that's it. No
- *       token to find or paste; see the PLEX_TOKEN constant below if
- *       you'd rather set one manually instead.
  */
 
 import { run } from "uebersicht";
@@ -50,12 +49,20 @@ let PLEX_URL = "http://192.168.1.50:32400"; // optional — fine to leave as-is,
 const SERVER_DISPLAY_NAME = null; // optional — leave null to show your server's real name
 
 // ============================================================
-//  Sign in with the button in the widget and this fills itself in —
-//  nothing to paste here. Only touch this if you'd rather skip sign-in
-//  and set a token manually: https://support.plex.tv/articles/204059436
+//  >>> CHANGE THIS <<<  paste your own Plex token below
 // ============================================================
 let PLEX_TOKEN = "YOUR_TOKEN_HERE";
 const PLEX_USERNAME = "";
+
+// ============================================================
+//  Sonarr (optional) -- leave both blank to hide this section entirely
+// ============================================================
+let SONARR_URL = ""; // e.g. "http://192.168.1.50:8989"
+let SONARR_API_KEY = ""; // Sonarr -> Settings -> General -> API Key
+
+function isSonarrConfigured() {
+  return Boolean(SONARR_URL) && Boolean(SONARR_API_KEY);
+}
 
 function plexServerWebUrl() {
   return `${PLEX_URL}/web/index.html`;
@@ -64,7 +71,7 @@ function plexServerWebUrl() {
 // The widget's own version -- bump this (and widget.json) on release.
 // Compared against the latest GitHub release tag so the widget can tell
 // you when a newer StreamPulse is out.
-const WIDGET_VERSION = "1.4";
+const WIDGET_VERSION = "1.5";
 const STREAMPULSE_REPO = "witchking86/stream-pulse";
 
 const SIGNIN_QUOTES = [
@@ -155,18 +162,147 @@ export const initialState = {
   topTitleCount: 0,
   topUser: null,
   topUserCount: 0,
-  sectionOrder: ["nowPlaying", "recentAdded", "activity", "system"],
+  sectionOrder: ["nowPlaying", "recentAdded", "activity", "system", "sonarr"],
   hiddenSections: [],
   bandwidthOverlay: false,
   recentCategoryOrder: [],
   recentPosterOffset: {},
   hiddenRecentCategories: [],
   aboutOpen: false,
+  popoutAboutOpen: false,
   plexAuthPin: null,
   plexAuthStatus: "idle",
   plexAuthError: null,
   plexAuthQuote: null,
+  sonarrCollapsed: false,
+  sonarrQueue: [],
+  sonarrMissingCount: null,
+  sonarrUpcoming: [],
+  sonarrDiskFree: null,
+  sonarrHealth: [],
   plexServerIssue: null,
+  streamsPopoutOpen: false,
+  streamsPopoutFullscreen: false,
+  streamsPopoutTileSize: "medium",
+  streamsPopoutColumns: "auto",
+  streamsPopoutRows: "auto",
+  streamsPopoutSort: "title",
+  streamsPopoutSortDir: "asc",
+  streamsPopoutFilterUser: "all",
+  streamsPopoutFilterState: "all",
+  streamsPopoutFilterDecision: "all",
+  streamsPopoutFilterType: "all",
+  streamsPopoutFilterMultiOnly: false,
+  streamsPopoutSearch: "",
+  streamsPopoutBehind: false,
+  dashboardHidden: false,
+  customServerTitle: null,
+  editingServerTitle: false,
+  logoHidden: false,
+  // On by default -- the confetti is meant to just work the first time
+  // someone streams into first place for the day, not require an opt-in
+  // click to discover it exists.
+  confettiEnabled: true,
+  // Off by default -- a background effect this size should be an
+  // opt-in the first time, unlike confetti which is a brief celebration.
+  snowEnabled: false,
+  // What actually keeps the snow layer mounted -- matches snowEnabled
+  // immediately when turning snow ON (unchanged, no fade), but lags
+  // behind it when turning snow OFF (see the toggle's onClick and
+  // SNOW_ENABLED_SWAP below) so the layer stays mounted for the whole
+  // WEATHER_ENABLED_FADE_MS fade-out instead of vanishing the instant
+  // the button's clicked -- see triggerWeatherEnabledFadeOut.
+  snowEnabledDisplayed: false,
+  // false = gentle snowfall with a little wind, true = full storm (more
+  // flakes, faster fall, stronger wind). The snow lock (always-visible
+  // vs fades with transparency, same idea as the background photo lock)
+  // isn't React state -- see snowOpacityLocked/SNOW_LOCKED_FILE below,
+  // same imperative pattern as bgImageLocked.
+  snowStorm: false,
+  // What renderSnowflakes is ACTUALLY called with -- lags one beat behind
+  // snowStorm (the target the toggle button/persisted file reflect) on
+  // purpose. Toggling Storm fades the current snow out (see
+  // --snow-storm-fade below), and only once that fade-out finishes does
+  // snowStormDisplayed flip to match snowStorm and the fade back in
+  // starts -- see the storm toggle's onClick and SNOW_STORM_SWAP below.
+  // That's what makes the transition a clean fade instead of every
+  // flake's speed/count/wind snapping (or jankily re-interpolating) to
+  // new values on a still-visible, still-animating population.
+  snowStormDisplayed: false,
+  // Which way the storm's wind blows: -1 = left, 1 = right. Not
+  // time-based -- it only changes when Storm is actually selected again
+  // (see TOGGLE_SNOW_STORM below), so the direction holds steady exactly
+  // as long as the user leaves it alone instead of drifting on its own
+  // clock. Starts at -1 (left) so the first time Storm is picked it
+  // blows left; picking Storm again (after switching back to Light Wind
+  // and back) flips it to right, and so on.
+  snowGustDirection: -1,
+  // 0-100, how many of the possible flakes/drops/leaves actually render
+  // -- each effect's own base piece count (see the render* functions
+  // below) is what 100 means; the locks for rain/leaves live outside
+  // React state too, same reasoning as snowOpacityLocked.
+  snowAmount: 100,
+  rainEnabled: false,
+  // Same lag-only-on-the-way-out idea as snowEnabledDisplayed above.
+  rainEnabledDisplayed: false,
+  // false = steady rain, true = a full storm (more, faster drops) with
+  // occasional lightning flashes layered on top -- same on/off idea as
+  // snowStorm above.
+  rainStorm: false,
+  // Same fade-then-swap idea as snowStormDisplayed above, just for rain.
+  rainStormDisplayed: false,
+  rainAmount: 100,
+  leavesEnabled: false,
+  // Same lag-only-on-the-way-out idea as snowEnabledDisplayed above.
+  leavesEnabledDisplayed: false,
+  // false = a gentle drift, true = a windstorm (more leaves, faster/
+  // wider drift and spin) -- same on/off idea as snowStorm above.
+  leavesStorm: false,
+  // Same fade-then-swap idea as snowStormDisplayed above, just for leaves.
+  leavesStormDisplayed: false,
+  leavesAmount: 100,
+  halloweenEnabled: false,
+  // Same lag-only-on-the-way-out idea as snowEnabledDisplayed above --
+  // turning Halloween on flips this immediately, turning it off fades
+  // the whole layer out first (see triggerWeatherEnabledFadeOut).
+  halloweenEnabledDisplayed: false,
+  // Bats, pumpkins/jack-o-lanterns, and cats are each optional on their
+  // own once Halloween is on -- default true (all three shown), no fade
+  // of their own since the master Halloween toggle already handles that.
+  batsEnabled: true,
+  batsAmount: 100,
+  pumpkinsEnabled: true,
+  pumpkinsAmount: 100,
+  catsEnabled: true,
+  catsAmount: 100,
+  // Ghosts wander the widget on their own (see renderGhosts/.ghost
+  // below) -- same default-on, same slider shape as the other three.
+  ghostsEnabled: true,
+  ghostsAmount: 100,
+  christmasEnabled: false,
+  // Same lag-only-on-the-way-out idea as halloweenEnabledDisplayed above.
+  christmasEnabledDisplayed: false,
+  // Santa is a single/fixed-count piece (one flying sleigh), so it's
+  // toggle-only -- no amount slider, same reasoning bats/pumpkins/cats'
+  // OWN sliders don't apply to a fixed-count thing. Mistletoe and
+  // ornaments are populations like pumpkins/leaves, so they get an
+  // amount each.
+  santaEnabled: true,
+  mistletoeEnabled: true,
+  mistletoeAmount: 100,
+  ornamentsEnabled: true,
+  ornamentsAmount: 100,
+  // Gingerbread men and glowing stars -- same population-with-an-amount
+  // shape as mistletoe/ornaments above, just two more falling pieces.
+  gingerbreadEnabled: true,
+  gingerbreadAmount: 100,
+  starsEnabled: true,
+  starsAmount: 100,
+  // The "Weather" button's dropdown -- Snow, Rain, Leaves, Halloween, and
+  // Christmas live in here, styled the same as everything else, with
+  // room to add more weather effects alongside them later without
+  // needing another top-level button.
+  weatherMenuOpen: false,
 };
 
 // init() gets the real dispatch function from Übersicht; render() does
@@ -174,6 +310,82 @@ export const initialState = {
 // scope lets click handlers defined inside render() still dispatch
 // state updates — same module, same closure.
 let dispatchRef = null;
+
+// How long the storm<->steady crossfade takes each direction (fade out,
+// then fade in) -- see WEATHER_STORM_FADE_MS's own comment where it's
+// used (the storm toggle onClick handlers below) for the full picture.
+// Kept as one constant so the JS setTimeout and the CSS transition
+// duration on --snow/rain/leaves-storm-fade (see the opacity rules near
+// the top of `className`) can't drift out of sync with each other --
+// same "one source of truth" reasoning as RAIN_SPLASH_POP_OFFSET.
+const WEATHER_STORM_FADE_MS = 450;
+
+// Drives the whole storm<->steady crossfade for one effect (snow, rain,
+// or leaves) from a single call in that effect's toggle onClick below.
+// fadeVarName is that effect's own CSS custom property (e.g.
+// "--snow-storm-fade", read by the opacity calc() on .snow-layer-back/
+// front, see the CSS near the top of `className`) -- setting it to "0"
+// fades the layer out over that CSS rule's own `transition: opacity`
+// duration (WEATHER_STORM_FADE_MS, kept in sync by eye with that rule's
+// literal 0.45s). toggleType flips the target (snowStorm/rainStorm/
+// leavesStorm) right away, same as any other toggle -- the button's own
+// label/persisted file reflect the new target immediately, only the
+// actual rendered snow/rain/leaves lags behind. After the fade-out
+// finishes, swapType (SNOW_STORM_SWAP/RAIN_STORM_SWAP/LEAVES_STORM_SWAP)
+// moves *StormDisplayed to match the target (whatever it is BY THEN,
+// not necessarily what it was at click time -- see that reducer case),
+// and the fade var goes back to "1" so the newly-swapped piece set fades
+// back in. Net effect: click Storm, the current snow/rain/leaves fades
+// away, then the new calm-or-storm piece set fades in -- a plain fade,
+// not a live re-interpolation of every flake's speed/count/wind while
+// it's still on screen and animating.
+function triggerWeatherStormFade(fadeVarName, toggleType, swapType) {
+  document.documentElement.style.setProperty(fadeVarName, "0");
+  dispatchRef && dispatchRef({ type: toggleType });
+  setTimeout(() => {
+    document.documentElement.style.setProperty(fadeVarName, "1");
+    dispatchRef && dispatchRef({ type: swapType });
+  }, WEATHER_STORM_FADE_MS);
+}
+
+// How long the Off fade takes -- see triggerWeatherEnabledFadeOut below.
+// Deliberately much longer than WEATHER_STORM_FADE_MS above (a quick,
+// snappy crossfade between two still-visible piece sets): turning an
+// effect off entirely reads better as a slow settle than a quick blink.
+const WEATHER_ENABLED_FADE_MS = 4000;
+
+// Turning a weather effect OFF fades the whole layer out over
+// WEATHER_ENABLED_FADE_MS instead of the layer just vanishing the
+// instant the button's clicked -- fadeVarName/durationVarName are that
+// effect's own CSS custom properties (e.g. "--snow-enabled-fade"/
+// "--snow-fade-duration", read by the opacity/transition-duration calc()
+// on .snow-layer-back/front, see the CSS near the top of `className`).
+// Setting the duration var to WEATHER_ENABLE_FADE_MS BEFORE dropping the
+// fade var to "0" is what makes this fade take 4s specifically rather
+// than reusing the storm crossfade's own quick 0.45s -- both fades
+// ultimately animate the same `opacity` property, so the transition
+// duration has to be swapped out per-fade like this rather than each
+// having a permanently different one. toggleType flips the target
+// immediately, same as any toggle (button label/persisted file reflect
+// "off" right away, unchanged from before) -- swapType, dispatched
+// WEATHER_ENABLED_FADE_MS later once the fade has actually finished, is
+// what unmounts the layer (moves *EnabledDisplayed to match whatever the
+// target is BY THEN, same "reads current target" trick as
+// SNOW_STORM_SWAP) -- and the duration var is put back to the storm
+// fade's own 0.45s so the NEXT storm toggle isn't left running at 4s.
+// Turning ON deliberately does NOT go through here -- see each toggle's
+// onClick below, which dispatches toggleType directly and immediately
+// for On, same as it always has.
+function triggerWeatherEnabledFadeOut(fadeVarName, durationVarName, toggleType, swapType) {
+  document.documentElement.style.setProperty(durationVarName, `${WEATHER_ENABLED_FADE_MS}ms`);
+  document.documentElement.style.setProperty(fadeVarName, "0");
+  dispatchRef && dispatchRef({ type: toggleType });
+  setTimeout(() => {
+    document.documentElement.style.setProperty(fadeVarName, "1");
+    document.documentElement.style.setProperty(durationVarName, `${WEATHER_STORM_FADE_MS}ms`);
+    dispatchRef && dispatchRef({ type: swapType });
+  }, WEATHER_ENABLED_FADE_MS);
+}
 
 // Debounce handle for the "Can't reach server" banner below -- pollNowPlaying
 // runs every 2s, and each failure used to schedule its own independent 8s
@@ -230,6 +442,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("mouseup", onDragEnd);
   window.addEventListener("mousemove", onResizeMove);
   window.addEventListener("mouseup", onResizeEnd);
+  window.addEventListener("mousemove", onPopoutDragMove);
+  window.addEventListener("mouseup", onPopoutDragEnd);
+  window.addEventListener("mousemove", onPopoutResizeMove);
+  window.addEventListener("mouseup", onPopoutResizeEnd);
 }
 
 async function loadSavedPosition() {
@@ -267,6 +483,21 @@ function setWidth(width) {
   return clamped;
 }
 
+// Hiding the dashboard only zeroes out the outer card's own chrome
+// (border/padding/shadow) via CSS vars on <html> -- it deliberately does
+// NOT touch opacity, because opacity on an ancestor composites its whole
+// subtree (including position:fixed descendants) into one transparent
+// layer, which would also fade out the streams pop-out even though the
+// pop-out is a DOM descendant of this same widget-root. Border/padding/
+// box-shadow have no such effect on descendants, so this is a safe way
+// to visually collapse the widget while leaving the pop-out untouched.
+function setDashboardHidden(hidden) {
+  document.documentElement.style.setProperty("--dashboard-border", hidden ? "none" : "1px solid rgba(255,255,255,0.08)");
+  document.documentElement.style.setProperty("--dashboard-padding", hidden ? "0px" : "16px 18px");
+  document.documentElement.style.setProperty("--dashboard-shadow", hidden ? "none" : "0 8px 30px rgba(0,0,0,0.35)");
+  document.documentElement.style.setProperty("--dashboard-pointer-events", hidden ? "none" : "auto");
+}
+
 function onResizeMove(e) {
   if (!resizeOrigin) return;
   setWidth(resizeOrigin.width + (e.clientX - resizeOrigin.mouseX));
@@ -293,6 +524,453 @@ async function loadSavedWidth() {
   } catch (e) {
     setWidth(DEFAULT_WIDTH);
   }
+}
+
+// --- Pop-out drag/resize (only active while not fullscreen) --------------
+// Same imperative CSS-custom-property + dotfile pattern as the main
+// widget's own drag/resize above, just scoped to its own --popout-*
+// properties so the two don't collide -- the pop-out is a position:fixed
+// overlay with its own independent coordinate system.
+const POPOUT_POSITION_FILE = "~/.plex_widget_popout_position";
+const POPOUT_SIZE_FILE = "~/.plex_widget_popout_size";
+const POPOUT_MARGIN = 40;
+const POPOUT_MIN_WIDTH = 480;
+const POPOUT_MIN_HEIGHT = 320;
+
+// Dock auto-hide while the pop-out is fullscreen -- this is a genuine
+// macOS system preference (System Settings > Desktop & Dock > "Automatically
+// hide and show the Dock"), toggled with `defaults write` and applied by
+// relaunching the Dock process. It's system-wide, not scoped to this
+// widget, and flips back to whatever it was before once fullscreen ends.
+// dockAutohidePrevState only holds a value while WE are the ones
+// currently overriding it -- null means either fullscreen isn't active,
+// or the Dock was already auto-hidden on its own before we touched it
+// (nothing for us to restore). If Übersicht itself gets killed/restarted
+// mid-fullscreen this in-memory flag is lost and the Dock could be left
+// auto-hidden -- an inherent limitation of a temporary system-level
+// toggle like this, not something the widget can fully guard against.
+let dockAutohidePrevState = null;
+
+async function enterPopoutFullscreenDockAutohide() {
+  let current = "false";
+  try {
+    const out = await run(`defaults read com.apple.dock autohide 2>/dev/null`);
+    current = (out || "").trim() === "1" ? "true" : "false";
+  } catch (e) {
+    current = "false";
+  }
+  if (current === "true") return; // already hidden -- nothing to change, nothing to restore later
+  dockAutohidePrevState = "false";
+  run(`defaults write com.apple.dock autohide -bool true && killall Dock`).catch(() => {});
+}
+
+function exitPopoutFullscreenDockAutohide() {
+  const prev = dockAutohidePrevState;
+  dockAutohidePrevState = null;
+  if (prev !== "false") return; // we never actually changed it -- leave the Dock alone
+  run(`defaults write com.apple.dock autohide -bool false && killall Dock`).catch(() => {});
+}
+
+let popoutDragOrigin = null; // { mouseX, mouseY, left, top } while dragging, else null
+let popoutResizeOrigin = null; // { mouseX, mouseY, width, height } while resizing, else null
+// Measured fresh at the start of each resize drag (see startPopoutResize)
+// -- the width floor below which the header's own logo would start
+// getting squeezed toward the right edge, same as it never happens on
+// the main widget's header.
+let popoutResizeMinWidth = POPOUT_MIN_WIDTH;
+
+// Reads the header's actual current content (title, live stream count
+// text, theme controls, size buttons, Fullscreen/Close, logo) and
+// returns the width it needs to lay out on a single line without
+// wrapping -- so the logo never gets crowded toward the edge the way a
+// fixed guess-number could drift out of sync with real content.
+function measurePopoutHeaderMinWidth() {
+  try {
+    const header = document.querySelector(".streams-popout-header");
+    const headerLeft = document.querySelector(".streams-popout-header-left");
+    const controls = document.querySelector(".streams-popout-controls");
+    if (!header || !headerLeft || !controls) return POPOUT_MIN_WIDTH;
+    const prevWrap = controls.style.flexWrap;
+    controls.style.flexWrap = "nowrap";
+    const controlsWidth = controls.scrollWidth;
+    controls.style.flexWrap = prevWrap;
+    const headerLeftWidth = headerLeft.scrollWidth;
+    const headerStyle = getComputedStyle(header);
+    const paddingX = parseFloat(headerStyle.paddingLeft || "0") + parseFloat(headerStyle.paddingRight || "0");
+    const gap = parseFloat(headerStyle.columnGap || headerStyle.gap || "0") || 12;
+    const needed = Math.ceil(headerLeftWidth + gap + controlsWidth + paddingX);
+    return Math.max(POPOUT_MIN_WIDTH, needed);
+  } catch (e) {
+    return POPOUT_MIN_WIDTH;
+  }
+}
+
+// Same idea as measurePopoutHeaderMinWidth, but for the filter/sort
+// toolbar row below the header. Only protects the Multi-stream only chip
+// + the Sort group staying together on one line -- everything before the
+// chip (search box, filter dropdowns) is free to wrap onto its own
+// line(s) above them. That's a smaller floor than protecting the whole
+// row, so shrinking the pop-out can still get down to roughly "Multi-
+// stream only and Sort fit together, everything else wraps above them"
+// instead of stopping while there's still room to spare. Only present
+// once there are sessions to filter, so an absent toolbar/chip just
+// contributes nothing to the floor.
+function measurePopoutToolbarMinWidth() {
+  try {
+    const toolbar = document.querySelector(".streams-popout-toolbar");
+    const multiChip = document.querySelector(".streams-popout-toggle-chip");
+    const sortGroup = document.querySelector(".streams-popout-sort-group");
+    if (!toolbar || !multiChip || !sortGroup) return 0;
+    // Force a single unwrapped line first so the chip and Sort group
+    // report their true natural widths. Without this, if a resize drag
+    // starts while the toolbar is already wrapped/squeezed from an
+    // earlier drag, getBoundingClientRect() would capture that
+    // already-shrunk size (flex items can shrink below their natural
+    // width via the default flex-shrink:1 once a wrapped line itself
+    // doesn't fit) instead of what they actually need -- letting each
+    // subsequent drag ratchet the floor narrower than the one before it,
+    // which is exactly the runaway-squeeze this is meant to prevent.
+    const prevWrap = toolbar.style.flexWrap;
+    toolbar.style.flexWrap = "nowrap";
+    const toolbarStyle = getComputedStyle(toolbar);
+    const paddingX = parseFloat(toolbarStyle.paddingLeft || "0") + parseFloat(toolbarStyle.paddingRight || "0");
+    const gap = parseFloat(toolbarStyle.columnGap || toolbarStyle.gap || "0") || 8;
+    const chipWidth = multiChip.getBoundingClientRect().width;
+    const sortWidth = sortGroup.getBoundingClientRect().width;
+    toolbar.style.flexWrap = prevWrap;
+    return Math.ceil(paddingX + chipWidth + gap + sortWidth);
+  } catch (e) {
+    return 0;
+  }
+}
+
+function currentPopoutPos() {
+  const style = getComputedStyle(document.documentElement);
+  const left = parseFloat(style.getPropertyValue("--popout-pos-left"));
+  const top = parseFloat(style.getPropertyValue("--popout-pos-top"));
+  return {
+    left: Number.isFinite(left) ? left : POPOUT_MARGIN,
+    top: Number.isFinite(top) ? top : POPOUT_MARGIN,
+  };
+}
+
+function setPopoutPos(left, top) {
+  const clampedLeft = Math.max(0, left);
+  const clampedTop = Math.max(0, top);
+  document.documentElement.style.setProperty("--popout-pos-left", `${clampedLeft}px`);
+  document.documentElement.style.setProperty("--popout-pos-top", `${clampedTop}px`);
+}
+
+function onPopoutDragMove(e) {
+  if (!popoutDragOrigin) return;
+  setPopoutPos(
+    popoutDragOrigin.left + (e.clientX - popoutDragOrigin.mouseX),
+    popoutDragOrigin.top + (e.clientY - popoutDragOrigin.mouseY)
+  );
+}
+
+function onPopoutDragEnd() {
+  if (!popoutDragOrigin) return;
+  popoutDragOrigin = null;
+  const { left, top } = currentPopoutPos();
+  run(`echo "${Math.round(left)},${Math.round(top)}" > ${POPOUT_POSITION_FILE}`).catch(() => {});
+}
+
+function startPopoutDrag(e) {
+  e.preventDefault();
+  const { left, top } = currentPopoutPos();
+  popoutDragOrigin = { mouseX: e.clientX, mouseY: e.clientY, left, top };
+}
+
+async function loadSavedPopoutPosition() {
+  try {
+    const out = await run(`cat ${POPOUT_POSITION_FILE} 2>/dev/null`);
+    const [left, top] = (out || "").trim().split(",").map(Number);
+    if (Number.isFinite(left) && Number.isFinite(top)) setPopoutPos(left, top);
+  } catch (e) {
+    // no saved position yet -- CSS default (40px margin) applies
+  }
+}
+
+function currentPopoutSize() {
+  const style = getComputedStyle(document.documentElement);
+  const width = parseFloat(style.getPropertyValue("--popout-width"));
+  const height = parseFloat(style.getPropertyValue("--popout-height"));
+  const fallbackW = ((typeof window !== "undefined" ? window.innerWidth : 1200) - POPOUT_MARGIN * 2) / 2;
+  const fallbackH = ((typeof window !== "undefined" ? window.innerHeight : 800) - POPOUT_MARGIN * 2) / 2;
+  return {
+    width: Number.isFinite(width) ? width : fallbackW,
+    height: Number.isFinite(height) ? height : fallbackH,
+  };
+}
+
+function setPopoutSize(width, height) {
+  const w = Math.max(popoutResizeMinWidth, width);
+  const h = Math.max(POPOUT_MIN_HEIGHT, height);
+  document.documentElement.style.setProperty("--popout-width", `${w}px`);
+  document.documentElement.style.setProperty("--popout-height", `${h}px`);
+}
+
+function onPopoutResizeMove(e) {
+  if (!popoutResizeOrigin) return;
+  setPopoutSize(
+    popoutResizeOrigin.width + (e.clientX - popoutResizeOrigin.mouseX),
+    popoutResizeOrigin.height + (e.clientY - popoutResizeOrigin.mouseY)
+  );
+}
+
+function onPopoutResizeEnd() {
+  if (!popoutResizeOrigin) return;
+  popoutResizeOrigin = null;
+  const { width, height } = currentPopoutSize();
+  run(`echo "${Math.round(width)},${Math.round(height)}" > ${POPOUT_SIZE_FILE}`).catch(() => {});
+}
+
+function startPopoutResize(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const { width, height } = currentPopoutSize();
+  popoutResizeOrigin = { mouseX: e.clientX, mouseY: e.clientY, width, height };
+  popoutResizeMinWidth = Math.max(measurePopoutHeaderMinWidth(), measurePopoutToolbarMinWidth());
+}
+
+async function loadSavedPopoutSize() {
+  try {
+    const out = await run(`cat ${POPOUT_SIZE_FILE} 2>/dev/null`);
+    const [width, height] = (out || "").trim().split(",").map(Number);
+    if (Number.isFinite(width) && Number.isFinite(height)) setPopoutSize(width, height);
+  } catch (e) {
+    // no saved size yet -- CSS default (viewport minus margins) applies
+  }
+}
+
+// --- Pop-out background theming (independent from the main widget) ------
+// Same imperative CSS-custom-property + dotfile pattern as the main
+// widget's own transparency slider/color swatches, but scoped to its
+// own --popout-bg-* properties and its own dotfiles -- the pop-out's
+// look is its own setting now, not tied to (or overridden by) whatever
+// the main widget's footer controls are set to.
+const POPOUT_BG_OPACITY_FILE = "~/.plex_widget_popout_bg_opacity";
+const POPOUT_BG_COLOR_FILE = "~/.plex_widget_popout_bg_color";
+const DEFAULT_POPOUT_BG_OPACITY = 0; // matches the main widget's own starting point
+const DEFAULT_POPOUT_BG_COLOR = "18,18,20";
+
+function currentPopoutBgOpacity() {
+  const style = getComputedStyle(document.documentElement);
+  const v = parseFloat(style.getPropertyValue("--popout-bg-opacity"));
+  return Number.isFinite(v) ? v : DEFAULT_POPOUT_BG_OPACITY;
+}
+
+function setPopoutBgOpacity(opacity) {
+  document.documentElement.style.setProperty("--popout-bg-opacity", String(opacity));
+}
+
+function onPopoutBgOpacitySliderChange(e) {
+  const transparencyPct = Number(e.target.value);
+  const opacity = Math.max(0, Math.min(1, 1 - transparencyPct / 100));
+  setPopoutBgOpacity(opacity);
+  run(`echo "${opacity}" > ${POPOUT_BG_OPACITY_FILE}`).catch(() => {});
+  const label = e.target.previousElementSibling;
+  if (label) label.textContent = `${transparencyPct}%`;
+}
+
+async function loadSavedPopoutBgOpacity() {
+  try {
+    const out = await run(`cat ${POPOUT_BG_OPACITY_FILE} 2>/dev/null`);
+    const v = parseFloat((out || "").trim());
+    if (Number.isFinite(v)) setPopoutBgOpacity(v);
+    else setPopoutBgOpacity(DEFAULT_POPOUT_BG_OPACITY);
+  } catch (e) {
+    setPopoutBgOpacity(DEFAULT_POPOUT_BG_OPACITY);
+  }
+}
+
+function currentPopoutBgColor() {
+  const style = getComputedStyle(document.documentElement);
+  const v = style.getPropertyValue("--popout-bg-color-rgb").trim();
+  return v || DEFAULT_POPOUT_BG_COLOR;
+}
+
+function setPopoutBgColor(rgb) {
+  document.documentElement.style.setProperty("--popout-bg-color-rgb", rgb);
+}
+
+function onPopoutBgColorSwatchClick(e, rgb) {
+  setPopoutBgColor(rgb);
+  run(`echo "${rgb}" > ${POPOUT_BG_COLOR_FILE}`).catch(() => {});
+  const group = e.currentTarget.parentElement;
+  if (group) {
+    Array.from(group.children).forEach((el) => el.classList.remove("bg-color-swatch-selected"));
+  }
+  e.currentTarget.classList.add("bg-color-swatch-selected");
+}
+
+async function loadSavedPopoutBgColor() {
+  try {
+    const out = await run(`cat ${POPOUT_BG_COLOR_FILE} 2>/dev/null`);
+    const v = (out || "").trim();
+    if (v) setPopoutBgColor(v);
+    else setPopoutBgColor(DEFAULT_POPOUT_BG_COLOR);
+  } catch (e) {
+    setPopoutBgColor(DEFAULT_POPOUT_BG_COLOR);
+  }
+}
+
+// --- Pop-out custom background image ------------------------------------
+// Lets the user pick a local photo as the pop-out's background, layered
+// under the transparency/tint controls above (which now double as a
+// dimmer over the photo -- see .streams-popout-overlay's background-image
+// stack in the className below). Same imperative CSS-custom-property
+// pattern as the color/opacity controls; the chosen file is copied into a
+// fixed local folder rather than referenced in place, so the pop-out
+// doesn't break if the original gets moved, renamed, or lives on
+// removable/network storage that isn't always mounted.
+//
+// The copied file is *not* referenced with a plain file:// URL -- the
+// widget runs in a WKWebView that's only ever given read access to its
+// own widget sandbox (that's how Übersicht loads it), so a file:// URL
+// pointing anywhere else, even under our own dotfile folder, silently
+// fails to load: no error, the CSS property just never resolves to an
+// image. Embedding the picture's bytes directly as a data: URI instead
+// sidesteps that entirely, since nothing outside the CSS value itself
+// needs to be fetched.
+const BG_IMAGE_DIR = "~/.plex_widget_images";
+const POPOUT_BG_IMAGE_PATH_FILE = "~/.plex_widget_popout_bg_image_path";
+const POPOUT_BG_IMAGE_LOCKED_FILE = "~/.plex_widget_popout_bg_image_locked";
+
+function dataUriForImagePath(path) {
+  return run(
+    `MIME="$(file -b --mime-type "${path}" 2>/dev/null)"; ` +
+    `if [ -z "$MIME" ]; then MIME="image/jpeg"; fi; ` +
+    `B64="$(base64 < "${path}" | tr -d '\\n')"; ` +
+    `if [ -z "$B64" ]; then exit 1; fi; ` +
+    `echo "data:$MIME;base64,$B64"`
+  ).then((out) => (out || "").trim());
+}
+
+// Pushes the two "which layer is the real photo" custom properties a
+// background stack (see the className comments above) reads from --
+// exactly one of them ever holds the actual url(...), chosen by
+// `locked`, so exactly one CSS layer (locked = always-visible photo with
+// a dimmer on top, unlocked = the whole thing fades with the slider) is
+// ever actually showing a picture.
+function applyBgImageLayers(prefix, locked, dataUri) {
+  const urlValue = dataUri ? `url("${dataUri}")` : "none";
+  document.documentElement.style.setProperty(`--${prefix}-bg-image-locked`, locked ? urlValue : "none");
+  document.documentElement.style.setProperty(`--${prefix}-bg-image-unlocked`, locked ? "none" : urlValue);
+}
+
+// Cached in plain module state rather than re-read from the DOM (same
+// idea as dockAutohidePrevState elsewhere) -- both the photo itself and
+// the lock toggle need to reapply the *other* one's current value
+// without an extra async round-trip through the shell.
+let popoutBgImageDataUri = null;
+let popoutBgImageLocked = false;
+
+function currentPopoutBgImage() {
+  return popoutBgImageDataUri;
+}
+
+function currentPopoutBgImageLocked() {
+  return popoutBgImageLocked;
+}
+
+function setPopoutBgImage(dataUri) {
+  popoutBgImageDataUri = dataUri || null;
+  applyBgImageLayers("popout", popoutBgImageLocked, popoutBgImageDataUri);
+}
+
+function persistPopoutBgImagePath(path) {
+  if (!path) {
+    run(`rm -f ${POPOUT_BG_IMAGE_PATH_FILE}`).catch(() => {});
+    return;
+  }
+  try {
+    const b64 = btoa(unescape(encodeURIComponent(path)));
+    run(`echo "${b64}" > ${POPOUT_BG_IMAGE_PATH_FILE}`).catch(() => {});
+  } catch (e) {
+    // encoding failed -- leave any previously saved path alone
+  }
+}
+
+function onTogglePopoutBgImageLockClick() {
+  popoutBgImageLocked = !popoutBgImageLocked;
+  applyBgImageLayers("popout", popoutBgImageLocked, popoutBgImageDataUri);
+  run(`echo "${popoutBgImageLocked}" > ${POPOUT_BG_IMAGE_LOCKED_FILE}`).catch(() => {});
+}
+
+// Re-derives the data: URI from the copied-in-place file on every widget
+// load (rather than persisting the (large) data URI itself in the
+// dotfile) -- the dotfile only ever holds the short file path. The lock
+// preference is read first so the photo lands directly in the right
+// layer instead of flashing in the wrong mode for a frame.
+async function loadSavedPopoutBgImage() {
+  try {
+    const lockOut = await run(`cat ${POPOUT_BG_IMAGE_LOCKED_FILE} 2>/dev/null`);
+    popoutBgImageLocked = (lockOut || "").trim() === "true";
+  } catch (e) {
+    popoutBgImageLocked = false;
+  }
+  try {
+    const out = (await run(`cat ${POPOUT_BG_IMAGE_PATH_FILE} 2>/dev/null`) || "").trim();
+    if (out) {
+      const decoded = decodeURIComponent(escape(atob(out)));
+      if (decoded) {
+        const dataUri = await dataUriForImagePath(decoded);
+        if (dataUri) {
+          setPopoutBgImage(dataUri);
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    // no saved image yet, or the file it points to is gone -- fall
+    // through to applying the (empty) default below
+  }
+  applyBgImageLayers("popout", popoutBgImageLocked, null);
+}
+
+// Shells out to a native "choose file" dialog (osascript), copies
+// whatever the user picks into BG_IMAGE_DIR under a fixed name (any
+// previous popout-bg.* is removed first so old images don't pile up),
+// and hands back its final path. Rejects if the user cancels the dialog
+// or the copy fails.
+function pickPopoutBgImageFile() {
+  return run(
+    `SRC="$(osascript -e 'POSIX path of (choose file with prompt "Choose a pop-out background image" of type {"public.image"})' 2>/dev/null)"; ` +
+    `if [ -z "$SRC" ]; then exit 1; fi; ` +
+    `mkdir -p ${BG_IMAGE_DIR}; ` +
+    `rm -f ${BG_IMAGE_DIR}/popout-bg.*; ` +
+    `EXT="\${SRC##*.}"; ` +
+    `DEST="$HOME/.plex_widget_images/popout-bg.$EXT"; ` +
+    `cp "$SRC" "$DEST" || exit 1; ` +
+    `echo "$DEST"`
+  ).then((out) => (out || "").trim());
+}
+
+async function onPickPopoutBgImageClick() {
+  // A cancelled dialog rejects here too (osascript exits non-zero) --
+  // that's the ordinary "changed my mind" case, so it's swallowed
+  // silently rather than shown as an error.
+  const path = await pickPopoutBgImageFile().catch(() => null);
+  if (!path) return;
+  try {
+    const dataUri = await dataUriForImagePath(path);
+    if (!dataUri) throw new Error("empty data URI");
+    setPopoutBgImage(dataUri);
+    persistPopoutBgImagePath(path);
+  } catch (e) {
+    // The file *did* get picked and copied at this point, so a failure
+    // here is worth surfacing rather than swallowing quietly.
+    dispatchRef && dispatchRef({ type: "ACTION_MESSAGE", message: "Couldn't set that pop-out background photo" });
+    setTimeout(() => dispatchRef && dispatchRef({ type: "ACTION_MESSAGE", message: null }), 5000);
+  }
+}
+
+function onClearPopoutBgImageClick() {
+  setPopoutBgImage(null);
+  persistPopoutBgImagePath(null);
+  run(`rm -f ${BG_IMAGE_DIR}/popout-bg.*`).catch(() => {});
 }
 
 // --- Pause timers ------------------------------------------------------
@@ -424,6 +1102,241 @@ async function loadSavedBgColor() {
   }
 }
 
+// --- Accent color (the one-time hardcoded Plex orange, now a picker) -----
+// Same imperative CSS-custom-property + dotfile pattern as the background
+// color swatches just above -- an "r,g,b" triplet string dropped straight
+// into rgb(var(--plex-accent-rgb))/rgba(var(--plex-accent-rgb), alpha)
+// wherever the widget used to hardcode #E5A00D: the Now Playing progress
+// bar (.bar-fill) and its faint pulsing buffer segment (.bar-buffer), the
+// section-divider lines, the server name (.server-title/-input), the
+// Activity section's own values (.count-value), the avatar's online glow
+// (.avatar-online), the pulsing glow around an actively-playing stream
+// tile and a freshly-added poster (both share @keyframes
+// poster-glow-pulse), the draggable thumb on the Transparency/weather
+// amount sliders (.bg-opacity-slider/.weather-amount-slider ::-webkit-
+// slider-thumb), the "Scroll for more" hint below Now Playing
+// (.scroll-more-hint), the "Pull to refresh" indicator above it
+// (.refresh-pull-indicator, including its icon via currentColor), a
+// Recently Added poster's own border (.recent-poster's box-shadow --
+// .recent-poster-new's animated glow already went through
+// poster-glow-pulse above), the LOCAL bandwidth graph specifically
+// (.bandwidth-bar/.bw-tooltip/.bw-legend-dot's own .local variants --
+// REMOTE keeps its separate blue so the two stay visually
+// distinguishable when overlaid, per request), and a category actively
+// being scanned in Recently Added (.recent-group-title.scanning,
+// .scan-spinner, plus the currently-unused .count-pill.scanning for the
+// same reason). Everywhere else that still hardcodes #E5A00D (badges,
+// the Recently Added refresh-btn's own spinning color, Sonarr health,
+// etc.) is deliberately untouched -- only what was actually asked for.
+// "Default" is the original Plex orange itself, first in the list like
+// Slate is for the background swatches above.
+const ACCENT_COLOR_FILE = "~/.plex_widget_accent_color";
+const DEFAULT_ACCENT_COLOR = "229,160,13"; // the widget's original Plex orange
+const ACCENT_COLOR_PRESETS = [
+  { label: "Default", rgb: "229,160,13" },
+  { label: "Crimson", rgb: "224,64,64" },
+  { label: "Rose", rgb: "232,93,144" },
+  { label: "Violet", rgb: "155,93,229" },
+  { label: "Azure", rgb: "58,148,237" },
+  { label: "Teal", rgb: "38,181,163" },
+  { label: "Emerald", rgb: "52,199,110" },
+  { label: "Silver", rgb: "214,214,220" },
+  { label: "Black", rgb: "0,0,0" },
+];
+
+function currentAccentColor() {
+  const style = getComputedStyle(document.documentElement);
+  const v = style.getPropertyValue("--plex-accent-rgb").trim();
+  return v || DEFAULT_ACCENT_COLOR;
+}
+
+function setAccentColor(rgb) {
+  document.documentElement.style.setProperty("--plex-accent-rgb", rgb);
+}
+
+function onAccentColorSwatchClick(e, rgb) {
+  setAccentColor(rgb);
+  run(`echo "${rgb}" > ${ACCENT_COLOR_FILE}`).catch(() => {});
+  // Imperative selection-ring update, not React state -- same reasoning
+  // as the background swatches' own click handler above.
+  const group = e.currentTarget.parentElement;
+  if (group) {
+    Array.from(group.children).forEach((el) => el.classList.remove("bg-color-swatch-selected"));
+  }
+  e.currentTarget.classList.add("bg-color-swatch-selected");
+}
+
+async function loadSavedAccentColor() {
+  try {
+    const out = await run(`cat ${ACCENT_COLOR_FILE} 2>/dev/null`);
+    const v = (out || "").trim();
+    if (v) setAccentColor(v);
+    else setAccentColor(DEFAULT_ACCENT_COLOR);
+  } catch (e) {
+    setAccentColor(DEFAULT_ACCENT_COLOR);
+  }
+}
+
+// Same imperative "CSS custom property on document.documentElement, no
+// reducer" shape as ACCENT_COLOR_PRESETS just above -- Santa's sleigh
+// (SANTA_SLEIGH_IMAGE) is a plain near-black silhouette (traced to a
+// transparent PNG), so it's recolored via a CSS mask rather than a
+// fill/currentColor trick (a raster image, not an SVG path) -- see
+// .santa-sleigh's mask-image/background-color rules above. "Default" is
+// the original near-black shade the silhouette was traced at.
+const SANTA_COLOR_FILE = "~/.plex_widget_santa_color";
+const DEFAULT_SANTA_COLOR = "17,17,17";
+const SANTA_COLOR_PRESETS = [
+  { label: "Default", rgb: "17,17,17" },
+  { label: "Red", rgb: "196,32,32" },
+  { label: "Green", rgb: "30,120,64" },
+  { label: "Gold", rgb: "212,168,44" },
+  { label: "White", rgb: "240,240,240" },
+  { label: "Silver", rgb: "182,182,190" },
+  { label: "Azure", rgb: "58,148,237" },
+];
+
+function currentSantaColor() {
+  const style = getComputedStyle(document.documentElement);
+  const v = style.getPropertyValue("--santa-rgb").trim();
+  return v || DEFAULT_SANTA_COLOR;
+}
+
+function setSantaColor(rgb) {
+  document.documentElement.style.setProperty("--santa-rgb", rgb);
+}
+
+function onSantaColorSwatchClick(e, rgb) {
+  setSantaColor(rgb);
+  run(`echo "${rgb}" > ${SANTA_COLOR_FILE}`).catch(() => {});
+  // Imperative selection-ring update, not React state -- same reasoning
+  // as the background/accent swatches' own click handlers above.
+  const group = e.currentTarget.parentElement;
+  if (group) {
+    Array.from(group.children).forEach((el) => el.classList.remove("bg-color-swatch-selected"));
+  }
+  e.currentTarget.classList.add("bg-color-swatch-selected");
+}
+
+async function loadSavedSantaColor() {
+  try {
+    const out = await run(`cat ${SANTA_COLOR_FILE} 2>/dev/null`);
+    const v = (out || "").trim();
+    if (v) setSantaColor(v);
+    else setSantaColor(DEFAULT_SANTA_COLOR);
+  } catch (e) {
+    setSantaColor(DEFAULT_SANTA_COLOR);
+  }
+}
+
+// --- Main widget custom background image --------------------------------
+// Same idea as the pop-out's own version above (BG_IMAGE_DIR,
+// dataUriForImagePath, and why it's a data: URI and not a plain file://
+// reference) -- a user-picked local photo as the widget's background,
+// layered under the transparency slider + color swatches (which now
+// double as a dimmer/tint over the photo).
+const BG_IMAGE_PATH_FILE = "~/.plex_widget_bg_image_path";
+const BG_IMAGE_LOCKED_FILE = "~/.plex_widget_bg_image_locked";
+
+let bgImageDataUri = null;
+let bgImageLocked = false;
+
+function currentBgImage() {
+  return bgImageDataUri;
+}
+
+function currentBgImageLocked() {
+  return bgImageLocked;
+}
+
+function setBgImage(dataUri) {
+  bgImageDataUri = dataUri || null;
+  applyBgImageLayers("plex", bgImageLocked, bgImageDataUri);
+}
+
+function persistBgImagePath(path) {
+  if (!path) {
+    run(`rm -f ${BG_IMAGE_PATH_FILE}`).catch(() => {});
+    return;
+  }
+  try {
+    const b64 = btoa(unescape(encodeURIComponent(path)));
+    run(`echo "${b64}" > ${BG_IMAGE_PATH_FILE}`).catch(() => {});
+  } catch (e) {
+    // encoding failed -- leave any previously saved path alone
+  }
+}
+
+function onToggleBgImageLockClick() {
+  bgImageLocked = !bgImageLocked;
+  applyBgImageLayers("plex", bgImageLocked, bgImageDataUri);
+  run(`echo "${bgImageLocked}" > ${BG_IMAGE_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedBgImage() {
+  try {
+    const lockOut = await run(`cat ${BG_IMAGE_LOCKED_FILE} 2>/dev/null`);
+    bgImageLocked = (lockOut || "").trim() === "true";
+  } catch (e) {
+    bgImageLocked = false;
+  }
+  try {
+    const out = (await run(`cat ${BG_IMAGE_PATH_FILE} 2>/dev/null`) || "").trim();
+    if (out) {
+      const decoded = decodeURIComponent(escape(atob(out)));
+      if (decoded) {
+        const dataUri = await dataUriForImagePath(decoded);
+        if (dataUri) {
+          setBgImage(dataUri);
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    // no saved image yet, or the file it points to is gone -- fall
+    // through to applying the (empty) default below
+  }
+  applyBgImageLayers("plex", bgImageLocked, null);
+}
+
+function pickBgImageFile() {
+  return run(
+    `SRC="$(osascript -e 'POSIX path of (choose file with prompt "Choose a widget background image" of type {"public.image"})' 2>/dev/null)"; ` +
+    `if [ -z "$SRC" ]; then exit 1; fi; ` +
+    `mkdir -p ${BG_IMAGE_DIR}; ` +
+    `rm -f ${BG_IMAGE_DIR}/widget-bg.*; ` +
+    `EXT="\${SRC##*.}"; ` +
+    `DEST="$HOME/.plex_widget_images/widget-bg.$EXT"; ` +
+    `cp "$SRC" "$DEST" || exit 1; ` +
+    `echo "$DEST"`
+  ).then((out) => (out || "").trim());
+}
+
+async function onPickBgImageClick() {
+  // A cancelled dialog rejects here too (osascript exits non-zero) --
+  // that's the ordinary "changed my mind" case, so it's swallowed
+  // silently rather than shown as an error.
+  const path = await pickBgImageFile().catch(() => null);
+  if (!path) return;
+  try {
+    const dataUri = await dataUriForImagePath(path);
+    if (!dataUri) throw new Error("empty data URI");
+    setBgImage(dataUri);
+    persistBgImagePath(path);
+  } catch (e) {
+    // The file *did* get picked and copied at this point, so a failure
+    // here is worth surfacing rather than swallowing quietly.
+    dispatchRef && dispatchRef({ type: "ACTION_MESSAGE", message: "Couldn't set that background photo" });
+    setTimeout(() => dispatchRef && dispatchRef({ type: "ACTION_MESSAGE", message: null }), 5000);
+  }
+}
+
+function onClearBgImageClick() {
+  setBgImage(null);
+  persistBgImagePath(null);
+  run(`rm -f ${BG_IMAGE_DIR}/widget-bg.*`).catch(() => {});
+}
+
 async function fetchJSON(url, extraHeaders) {
   try {
     const res = await fetch(url, { headers: { Accept: "application/json", ...(extraHeaders || {}) } });
@@ -432,6 +1345,92 @@ async function fetchJSON(url, extraHeaders) {
   } catch (e) {
     return null;
   }
+}
+
+async function fetchJSONViaCurl(url, headers) {
+  try {
+    const headerArgs = Object.entries(headers || {})
+      .map(([k, v]) => `-H "${k}: ${v}"`)
+      .join(" ");
+    const out = await run(`curl -s --max-time 6 ${headerArgs} "${url}"`);
+    if (!out) return null;
+    return JSON.parse(out);
+  } catch (e) {
+    return null;
+  }
+}
+
+function formatDiskSpace(bytes) {
+  if (bytes == null) return "\u2014";
+  const gb = bytes / (1000 * 1000 * 1000);
+  if (gb < 1000) return `${gb.toFixed(1)} GB free`;
+  return `${(gb / 1000).toFixed(1)} TB free`;
+}
+
+// Queue/missing/calendar/rootfolder/health -- the same handful of
+// endpoints any Sonarr dashboard widget uses. Polled once a minute,
+// not every second like Now Playing -- none of this changes that fast.
+const SONARR_CALENDAR_DAYS_AHEAD = 7;
+
+async function pollSonarr(dispatch) {
+  if (!isSonarrConfigured()) return;
+  const base = SONARR_URL.replace(/\/+$/, "");
+  const headers = { "X-Api-Key": SONARR_API_KEY, Accept: "application/json" };
+
+  const now = new Date();
+  const end = new Date(now.getTime() + SONARR_CALENDAR_DAYS_AHEAD * 24 * 60 * 60 * 1000);
+  const startParam = now.toISOString().slice(0, 10);
+  const endParam = end.toISOString().slice(0, 10);
+
+  const [queueData, missingData, calendarData, rootFolderData, healthData] = await Promise.all([
+    fetchJSONViaCurl(`${base}/api/v3/queue?pageSize=10&includeEpisode=true&includeSeries=true`, headers),
+    fetchJSONViaCurl(`${base}/api/v3/wanted/missing?pageSize=1`, headers),
+    fetchJSONViaCurl(`${base}/api/v3/calendar?start=${startParam}&end=${endParam}&includeSeries=true`, headers),
+    fetchJSONViaCurl(`${base}/api/v3/rootfolder`, headers),
+    fetchJSONViaCurl(`${base}/api/v3/health`, headers),
+  ]);
+
+  const queue = ((queueData && queueData.records) || [])
+    .slice(0, 5)
+    .map((item) => {
+      const size = item.size || 0;
+      const sizeleft = item.sizeleft != null ? item.sizeleft : size;
+      const pct = size > 0 ? Math.max(0, Math.min(100, ((size - sizeleft) / size) * 100)) : 0;
+      const seriesTitle = (item.series && item.series.title) || "Unknown";
+      const seasonEp = item.episode
+        ? `S${String(item.episode.seasonNumber).padStart(2, "0")}E${String(item.episode.episodeNumber).padStart(2, "0")}`
+        : "";
+      return {
+        id: item.id,
+        title: seasonEp ? `${seriesTitle} ${seasonEp}` : seriesTitle,
+        pct,
+        timeleft: item.timeleft || null,
+        status: item.trackedDownloadStatus || item.status || null,
+      };
+    });
+
+  const missingCount = missingData && typeof missingData.totalRecords === "number" ? missingData.totalRecords : null;
+
+  const nowMs = Date.now();
+  const upcoming = (Array.isArray(calendarData) ? calendarData : [])
+    .filter((ep) => ep.airDateUtc && new Date(ep.airDateUtc).getTime() >= nowMs)
+    .sort((a, b) => new Date(a.airDateUtc).getTime() - new Date(b.airDateUtc).getTime())
+    .slice(0, 3)
+    .map((ep) => ({
+      title: (ep.series && ep.series.title) || "Unknown",
+      seasonEp: `S${String(ep.seasonNumber).padStart(2, "0")}E${String(ep.episodeNumber).padStart(2, "0")}`,
+      airDateUtc: ep.airDateUtc,
+    }));
+
+  const roots = Array.isArray(rootFolderData) ? rootFolderData : [];
+  const diskFree = roots.length ? roots.reduce((sum, r) => sum + (r.freeSpace || 0), 0) : null;
+
+  const health = (Array.isArray(healthData) ? healthData : []).map((h) => ({
+    type: h.type || "warning",
+    message: h.message || "",
+  }));
+
+  dispatch({ type: "SONARR_STATUS", queue, missingCount, upcoming, diskFree, health });
 }
 
 // plex.tv's own device identity for this widget when talking to its v2
@@ -1105,13 +2104,65 @@ export const init = (dispatch) => {
   loadSavedWidth();
   loadSavedBgOpacity();
   loadSavedBgColor();
+  loadSavedAccentColor();
+  loadSavedSantaColor();
+  loadSavedBgImage();
   loadSavedSectionOrder(dispatch);
   loadSavedHiddenSections(dispatch);
   loadSavedCollapsedSections(dispatch);
   loadSavedBandwidthOverlay(dispatch);
+  loadSavedLogoHidden(dispatch);
+  loadSavedConfettiEnabled(dispatch);
+  loadSavedSnowEnabled(dispatch);
+  loadSavedSnowStorm(dispatch);
+  loadSavedSnowAmount(dispatch);
+  loadSavedSnowLocked();
+  loadSavedRainEnabled(dispatch);
+  loadSavedRainStorm(dispatch);
+  loadSavedRainAmount(dispatch);
+  loadSavedRainLocked();
+  loadSavedLeavesEnabled(dispatch);
+  loadSavedLeavesStorm(dispatch);
+  loadSavedLeavesAmount(dispatch);
+  loadSavedLeavesLocked();
+  loadSavedHalloweenEnabled(dispatch);
+  loadSavedBatsEnabled(dispatch);
+  loadSavedBatsAmount(dispatch);
+  loadSavedPumpkinsEnabled(dispatch);
+  loadSavedPumpkinsAmount(dispatch);
+  loadSavedCatsEnabled(dispatch);
+  loadSavedCatsAmount(dispatch);
+  loadSavedGhostsEnabled(dispatch);
+  loadSavedGhostsAmount(dispatch);
+  loadSavedHalloweenLocked();
+  loadSavedChristmasEnabled(dispatch);
+  loadSavedSantaEnabled(dispatch);
+  loadSavedMistletoeEnabled(dispatch);
+  loadSavedMistletoeAmount(dispatch);
+  loadSavedOrnamentsEnabled(dispatch);
+  loadSavedOrnamentsAmount(dispatch);
+  loadSavedGingerbreadEnabled(dispatch);
+  loadSavedGingerbreadAmount(dispatch);
+  loadSavedStarsEnabled(dispatch);
+  loadSavedStarsAmount(dispatch);
+  loadSavedChristmasLocked();
+  // Starts a background setTimeout loop that fires forever (a no-op
+  // whenever .lightning-layer isn't in the DOM, i.e. rain+storm aren't
+  // both on) -- see scheduleNextLightningStrike's own comment above.
+  scheduleNextLightningStrike();
+  loadSavedStreamsPopoutTileSize(dispatch);
+  loadSavedStreamsPopoutColumns(dispatch);
+  loadSavedStreamsPopoutRows(dispatch);
+  loadSavedStreamsPopoutSort(dispatch);
+  loadSavedPopoutPosition();
+  loadSavedPopoutSize();
+  loadSavedPopoutBgOpacity();
+  loadSavedPopoutBgColor();
+  loadSavedPopoutBgImage();
   loadSavedRecentCategoryOrder(dispatch);
   loadSavedHiddenRecentCategories(dispatch);
   loadSavedPausedAt(dispatch);
+  loadSavedCustomServerTitle(dispatch);
 
   // Resolve the best reachable address first so the very first round of
   // polls already hits it, then kick everything else off -- but not
@@ -1131,8 +2182,10 @@ export const init = (dispatch) => {
     });
   });
   pollWidgetUpdateStatus(dispatch);
+  pollSonarr(dispatch);
 
   setInterval(() => pollNowPlaying(dispatch), 2000);
+  setInterval(() => pollSonarr(dispatch), 60 * 1000);
   setInterval(() => pollLibrary(dispatch), 5 * 60 * 1000);
   setInterval(() => pollSystemStats(dispatch), 1000);
   setInterval(() => pollUpdateStatus(dispatch), 30 * 60 * 1000);
@@ -1288,16 +2341,323 @@ export const updateState = (event, previousState) => {
   if (event.type === "PLEX_NO_OWNED_SERVER") {
     return { ...previousState, plexServerIssue: event.reason };
   }
+  if (event.type === "TOGGLE_SONARR") {
+    return { ...previousState, sonarrCollapsed: !previousState.sonarrCollapsed };
+  }
+  if (event.type === "SONARR_STATUS") {
+    return {
+      ...previousState,
+      sonarrQueue: event.queue,
+      sonarrMissingCount: event.missingCount,
+      sonarrUpcoming: event.upcoming,
+      sonarrDiskFree: event.diskFree,
+      sonarrHealth: event.health,
+    };
+  }
   // (persistence for this toggle lives with the other dotfile-backed
   // settings — see BANDWIDTH_OVERLAY_FILE below)
   if (event.type === "TOGGLE_BANDWIDTH_OVERLAY") {
     return { ...previousState, bandwidthOverlay: !previousState.bandwidthOverlay };
+  }
+  // (persistence for this toggle lives with the other dotfile-backed
+  // settings — see LOGO_HIDDEN_FILE below)
+  if (event.type === "TOGGLE_LOGO") {
+    return { ...previousState, logoHidden: !previousState.logoHidden };
+  }
+  // (persistence for this toggle lives with the other dotfile-backed
+  // settings — see CONFETTI_ENABLED_FILE below)
+  if (event.type === "TOGGLE_CONFETTI") {
+    return { ...previousState, confettiEnabled: !previousState.confettiEnabled };
+  }
+  // (persistence for these two lives with the other dotfile-backed
+  // settings — see SNOW_ENABLED_FILE/SNOW_STORM_FILE below)
+  if (event.type === "TOGGLE_SNOW") {
+    // Turning ON shows the layer immediately (snowEnabledDisplayed flips
+    // right along with the target) -- unchanged, no fade. Turning OFF
+    // only flips the target -- snowEnabledDisplayed stays true until
+    // SNOW_ENABLED_SWAP, dispatched by the toggle's onClick once the
+    // WEATHER_ENABLED_FADE_MS fade-out actually finishes -- see
+    // snowEnabledDisplayed's own comment.
+    const turningOn = !previousState.snowEnabled;
+    return {
+      ...previousState,
+      snowEnabled: !previousState.snowEnabled,
+      snowEnabledDisplayed: turningOn ? true : previousState.snowEnabledDisplayed,
+    };
+  }
+  // Dispatched by the snow enabled toggle's onClick once the fade-out
+  // actually finishes, only when turning snow OFF -- moves
+  // snowEnabledDisplayed to match whatever snowEnabled is BY THEN (so
+  // clicking back on mid-fade just keeps the layer mounted, same "reads
+  // current target, not a stale click-time value" trick as
+  // SNOW_STORM_SWAP).
+  if (event.type === "SNOW_ENABLED_SWAP") {
+    return { ...previousState, snowEnabledDisplayed: previousState.snowEnabled };
+  }
+  if (event.type === "TOGGLE_SNOW_STORM") {
+    // Only flips the TARGET -- snowStormDisplayed (what's actually
+    // rendered) doesn't change here at all. See the storm toggle's
+    // onClick below: it fades the layer out first, THEN dispatches
+    // SNOW_STORM_SWAP once that fade-out finishes to move
+    // snowStormDisplayed to match this new target and fade back in.
+    // Wind direction only flips on the transition INTO storm (Light
+    // Wind -> Storm), not on every click and not on a timer -- see
+    // snowGustDirection's own comment above.
+    const turningStormOn = !previousState.snowStorm;
+    return {
+      ...previousState,
+      snowStorm: !previousState.snowStorm,
+      snowGustDirection: turningStormOn ? -previousState.snowGustDirection : previousState.snowGustDirection,
+    };
+  }
+  // Dispatched by the snow storm toggle's onClick, WEATHER_STORM_FADE_MS
+  // after the click (once the fade-out is done) -- moves
+  // snowStormDisplayed to match whatever snowStorm is BY THEN (not
+  // necessarily what it was at click time, if clicked again quickly),
+  // so renderSnowflakes starts drawing the new calm/storm piece set right
+  // as the fade back in begins.
+  if (event.type === "SNOW_STORM_SWAP") {
+    return { ...previousState, snowStormDisplayed: previousState.snowStorm };
+  }
+  if (event.type === "SET_SNOW_AMOUNT") {
+    return { ...previousState, snowAmount: event.value };
+  }
+  // (persistence for these lives with the other dotfile-backed
+  // settings — see RAIN_ENABLED_FILE/RAIN_STORM_FILE below)
+  if (event.type === "TOGGLE_RAIN") {
+    // Same lag-only-on-the-way-out idea as TOGGLE_SNOW above.
+    const turningOn = !previousState.rainEnabled;
+    return {
+      ...previousState,
+      rainEnabled: !previousState.rainEnabled,
+      rainEnabledDisplayed: turningOn ? true : previousState.rainEnabledDisplayed,
+    };
+  }
+  // Same idea as SNOW_ENABLED_SWAP above, just for rain.
+  if (event.type === "RAIN_ENABLED_SWAP") {
+    return { ...previousState, rainEnabledDisplayed: previousState.rainEnabled };
+  }
+  if (event.type === "TOGGLE_RAIN_STORM") {
+    // Same fade-then-swap idea as TOGGLE_SNOW_STORM above.
+    return { ...previousState, rainStorm: !previousState.rainStorm };
+  }
+  // Same idea as SNOW_STORM_SWAP above, just for rain.
+  if (event.type === "RAIN_STORM_SWAP") {
+    return { ...previousState, rainStormDisplayed: previousState.rainStorm };
+  }
+  if (event.type === "SET_RAIN_AMOUNT") {
+    return { ...previousState, rainAmount: event.value };
+  }
+  if (event.type === "TOGGLE_LEAVES") {
+    // Same lag-only-on-the-way-out idea as TOGGLE_SNOW above.
+    const turningOn = !previousState.leavesEnabled;
+    return {
+      ...previousState,
+      leavesEnabled: !previousState.leavesEnabled,
+      leavesEnabledDisplayed: turningOn ? true : previousState.leavesEnabledDisplayed,
+    };
+  }
+  // Same idea as SNOW_ENABLED_SWAP above, just for leaves.
+  if (event.type === "LEAVES_ENABLED_SWAP") {
+    return { ...previousState, leavesEnabledDisplayed: previousState.leavesEnabled };
+  }
+  if (event.type === "TOGGLE_LEAVES_STORM") {
+    // Same fade-then-swap idea as TOGGLE_SNOW_STORM above.
+    return { ...previousState, leavesStorm: !previousState.leavesStorm };
+  }
+  // Same idea as SNOW_STORM_SWAP above, just for leaves.
+  if (event.type === "LEAVES_STORM_SWAP") {
+    return { ...previousState, leavesStormDisplayed: previousState.leavesStorm };
+  }
+  if (event.type === "SET_LEAVES_AMOUNT") {
+    return { ...previousState, leavesAmount: event.value };
+  }
+  if (event.type === "TOGGLE_HALLOWEEN") {
+    // Same lag-only-on-the-way-out idea as TOGGLE_SNOW above.
+    const turningOn = !previousState.halloweenEnabled;
+    return {
+      ...previousState,
+      halloweenEnabled: !previousState.halloweenEnabled,
+      halloweenEnabledDisplayed: turningOn ? true : previousState.halloweenEnabledDisplayed,
+    };
+  }
+  // Same idea as SNOW_ENABLED_SWAP above, just for Halloween.
+  if (event.type === "HALLOWEEN_ENABLED_SWAP") {
+    return { ...previousState, halloweenEnabledDisplayed: previousState.halloweenEnabled };
+  }
+  // Bats/pumpkins/cats are simple independent flips -- no Displayed/fade
+  // counterpart, the master Halloween toggle above already fades the
+  // whole layer so these can just show/hide instantly within it.
+  if (event.type === "TOGGLE_BATS") {
+    return { ...previousState, batsEnabled: !previousState.batsEnabled };
+  }
+  if (event.type === "SET_BATS_AMOUNT") {
+    return { ...previousState, batsAmount: event.value };
+  }
+  if (event.type === "TOGGLE_PUMPKINS") {
+    return { ...previousState, pumpkinsEnabled: !previousState.pumpkinsEnabled };
+  }
+  if (event.type === "SET_PUMPKINS_AMOUNT") {
+    return { ...previousState, pumpkinsAmount: event.value };
+  }
+  if (event.type === "TOGGLE_CATS") {
+    return { ...previousState, catsEnabled: !previousState.catsEnabled };
+  }
+  if (event.type === "SET_CATS_AMOUNT") {
+    return { ...previousState, catsAmount: event.value };
+  }
+  // Ghosts are the same simple independent flip as bats/pumpkins/cats
+  // above.
+  if (event.type === "TOGGLE_GHOSTS") {
+    return { ...previousState, ghostsEnabled: !previousState.ghostsEnabled };
+  }
+  if (event.type === "SET_GHOSTS_AMOUNT") {
+    return { ...previousState, ghostsAmount: event.value };
+  }
+  if (event.type === "TOGGLE_CHRISTMAS") {
+    // Same lag-only-on-the-way-out idea as TOGGLE_HALLOWEEN above.
+    const turningOn = !previousState.christmasEnabled;
+    return {
+      ...previousState,
+      christmasEnabled: !previousState.christmasEnabled,
+      christmasEnabledDisplayed: turningOn ? true : previousState.christmasEnabledDisplayed,
+    };
+  }
+  // Same idea as HALLOWEEN_ENABLED_SWAP above, just for Christmas.
+  if (event.type === "CHRISTMAS_ENABLED_SWAP") {
+    return { ...previousState, christmasEnabledDisplayed: previousState.christmasEnabled };
+  }
+  // Santa/Mistletoe/Ornaments are simple independent flips -- same
+  // reasoning as TOGGLE_BATS/TOGGLE_PUMPKINS/TOGGLE_CATS above.
+  if (event.type === "TOGGLE_SANTA") {
+    return { ...previousState, santaEnabled: !previousState.santaEnabled };
+  }
+  if (event.type === "TOGGLE_MISTLETOE") {
+    return { ...previousState, mistletoeEnabled: !previousState.mistletoeEnabled };
+  }
+  if (event.type === "SET_MISTLETOE_AMOUNT") {
+    return { ...previousState, mistletoeAmount: event.value };
+  }
+  if (event.type === "TOGGLE_ORNAMENTS") {
+    return { ...previousState, ornamentsEnabled: !previousState.ornamentsEnabled };
+  }
+  if (event.type === "SET_ORNAMENTS_AMOUNT") {
+    return { ...previousState, ornamentsAmount: event.value };
+  }
+  // Gingerbread/Stars -- same independent-flip-plus-amount shape as
+  // Mistletoe/Ornaments just above.
+  if (event.type === "TOGGLE_GINGERBREAD") {
+    return { ...previousState, gingerbreadEnabled: !previousState.gingerbreadEnabled };
+  }
+  if (event.type === "SET_GINGERBREAD_AMOUNT") {
+    return { ...previousState, gingerbreadAmount: event.value };
+  }
+  if (event.type === "TOGGLE_STARS") {
+    return { ...previousState, starsEnabled: !previousState.starsEnabled };
+  }
+  if (event.type === "SET_STARS_AMOUNT") {
+    return { ...previousState, starsAmount: event.value };
+  }
+  // Closed automatically by the root's own onClick (anywhere outside the
+  // menu) as well as the Weather button itself -- same click-away idea
+  // as SET_STREAMS_POPOUT_BEHIND just below.
+  if (event.type === "SET_WEATHER_MENU_OPEN") {
+    return { ...previousState, weatherMenuOpen: event.value };
+  }
+  if (event.type === "TOGGLE_STREAMS_POPOUT") {
+    const willBeOpen = !previousState.streamsPopoutOpen;
+    return {
+      ...previousState,
+      streamsPopoutOpen: willBeOpen,
+      streamsPopoutFullscreen: false,
+      // Both a fresh open and a close should start from "popout on top,
+      // its own About closed" -- these aren't style choices worth
+      // persisting across opens the way position/size/theming are.
+      streamsPopoutBehind: false,
+      popoutAboutOpen: false,
+      // Filters/search are momentary, not a style choice -- reset on
+      // close so a forgotten filter doesn't make streams look "missing"
+      // next time. Sort (below) is left alone; that's persisted.
+      ...(willBeOpen ? null : {
+        streamsPopoutFilterUser: "all",
+        streamsPopoutFilterState: "all",
+        streamsPopoutFilterDecision: "all",
+        streamsPopoutFilterType: "all",
+        streamsPopoutFilterMultiOnly: false,
+        streamsPopoutSearch: "",
+      }),
+    };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_SORT") {
+    return { ...previousState, streamsPopoutSort: event.sort, streamsPopoutSortDir: event.dir };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_FILTER_USER") {
+    return { ...previousState, streamsPopoutFilterUser: event.value };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_FILTER_STATE") {
+    return { ...previousState, streamsPopoutFilterState: event.value };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_FILTER_DECISION") {
+    return { ...previousState, streamsPopoutFilterDecision: event.value };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_FILTER_TYPE") {
+    return { ...previousState, streamsPopoutFilterType: event.value };
+  }
+  if (event.type === "TOGGLE_STREAMS_POPOUT_FILTER_MULTI_ONLY") {
+    return { ...previousState, streamsPopoutFilterMultiOnly: !previousState.streamsPopoutFilterMultiOnly };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_SEARCH") {
+    return { ...previousState, streamsPopoutSearch: event.value };
+  }
+  if (event.type === "CLEAR_STREAMS_POPOUT_FILTERS") {
+    return {
+      ...previousState,
+      streamsPopoutFilterUser: "all",
+      streamsPopoutFilterState: "all",
+      streamsPopoutFilterDecision: "all",
+      streamsPopoutFilterType: "all",
+      streamsPopoutFilterMultiOnly: false,
+      streamsPopoutSearch: "",
+    };
+  }
+  if (event.type === "TOGGLE_STREAMS_POPOUT_FULLSCREEN") {
+    return { ...previousState, streamsPopoutFullscreen: !previousState.streamsPopoutFullscreen };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_TILE_SIZE") {
+    return { ...previousState, streamsPopoutTileSize: event.size };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_COLUMNS") {
+    return { ...previousState, streamsPopoutColumns: event.columns };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_ROWS") {
+    return { ...previousState, streamsPopoutRows: event.rows };
   }
   if (event.type === "ACCOUNT") {
     return { ...previousState, avatarUrl: event.avatarUrl };
   }
   if (event.type === "TOGGLE_ABOUT") {
     return { ...previousState, aboutOpen: !previousState.aboutOpen };
+  }
+  if (event.type === "TOGGLE_POPOUT_ABOUT") {
+    return { ...previousState, popoutAboutOpen: !previousState.popoutAboutOpen };
+  }
+  if (event.type === "SET_STREAMS_POPOUT_BEHIND") {
+    return { ...previousState, streamsPopoutBehind: event.value };
+  }
+  if (event.type === "HIDE_DASHBOARD") {
+    return { ...previousState, dashboardHidden: true };
+  }
+  if (event.type === "RESTORE_DASHBOARD") {
+    return { ...previousState, dashboardHidden: false };
+  }
+  if (event.type === "START_EDIT_SERVER_TITLE") {
+    return { ...previousState, editingServerTitle: true };
+  }
+  if (event.type === "CANCEL_EDIT_SERVER_TITLE") {
+    return { ...previousState, editingServerTitle: false };
+  }
+  if (event.type === "SET_CUSTOM_SERVER_TITLE") {
+    return { ...previousState, customServerTitle: event.value, editingServerTitle: false };
   }
   if (event.type === "PLEX_AUTH_PIN_CREATED") {
     return { ...previousState, plexAuthPin: { id: event.id, code: event.code }, plexAuthStatus: "pending", plexAuthError: null };
@@ -1324,11 +2684,916 @@ export const className = `
   width: var(--plex-widget-width, 480px);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
   color: #f2f2f2;
-  background: rgba(var(--plex-bg-color-rgb, 18, 18, 20), var(--plex-bg-opacity, 0));
-  border: 1px solid rgba(255,255,255,0.08);
+  /* Custom photo, mode 1 of 2: "locked" -- picked via the "Add Photo"
+     control down in the footer, this always shows the photo at full
+     clarity, with a flat color layer (a start/end-identical
+     linear-gradient, which paints as a plain solid tint since CSS
+     multiple-background syntax puts the first-listed layer on top) as a
+     dimmer over it, driven by the transparency slider. --plex-bg-image-
+     locked is only ever a real url(...) while the photo lock (see the
+     footer's Lock/Unlock control) is on -- otherwise it's "none" and the
+     ::before rule below (mode 2, "unlocked") takes over instead, fading
+     the photo itself along with everything else. With no photo at all,
+     both are "none" and this is exactly the old plain tinted background. */
+  background-color: transparent;
+  background-image:
+    linear-gradient(rgba(var(--plex-bg-color-rgb, 18, 18, 20), var(--plex-bg-opacity, 0)), rgba(var(--plex-bg-color-rgb, 18, 18, 20), var(--plex-bg-opacity, 0))),
+    var(--plex-bg-image-locked, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: var(--dashboard-border, 1px solid rgba(255,255,255,0.08));
   border-radius: 14px;
-  padding: 16px 18px;
-  box-shadow: 0 8px 30px rgba(0,0,0,0.35);
+  padding: var(--dashboard-padding, 16px 18px);
+  box-shadow: var(--dashboard-shadow, 0 8px 30px rgba(0,0,0,0.35));
+  pointer-events: var(--dashboard-pointer-events, auto);
+
+  /* Custom photo, mode 2 of 2: "unlocked" (the default) -- the photo and
+     the whole widget fade in and out together as one unit, exactly like
+     plain transparency did before photos existed, just extended to
+     include the photo. That needs the photo's own alpha to track the
+     slider, which a background-image layer on the root itself can't do
+     (opacity only applies to a whole element/box, and the root's real
+     opacity has to stay 1 or the widget's actual content -- text,
+     buttons -- would fade too). A ::before behind the content solves
+     that: its own opacity fades with the slider while the root and its
+     children stay fully opaque. --plex-bg-image-unlocked is "none"
+     whenever the lock above is on (or there's no photo at all), so this
+     is simply invisible and mode 1 above is the only thing showing.  */
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    /* Hardcoded to match this element's own border-radius above (14px)
+       rather than "inherit" -- Übersicht's CSS-in-JS pipeline doesn't
+       reliably resolve "inherit" for a generated pseudo-element here, so
+       this rendered as a plain square box and visually squared off the
+       rounded corners whenever the photo/tint layer had any opacity. */
+    border-radius: 14px;
+    pointer-events: none;
+    background-image: var(--plex-bg-image-unlocked, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: var(--plex-bg-opacity, 0);
+  }
+
+  /* Background weather (Weather menu, see .weather-menu below) -- snow,
+     rain, and falling leaves each get their own real child div rather
+     than another ::before, since each needs many individual piece
+     spans, not just one background-image. All three are placed as the
+     very first real children of .widget-root in the JSX below, so they
+     paint right after the two background layers above and before every
+     real piece of dashboard content, without needing a z-index: normal
+     source-order painting already puts them behind everything that
+     follows in the same stacking context (the same reason the ::before
+     layer above doesn't need one either), and none of the z-indexed
+     elements deeper in the tree (tooltips, popouts, etc.) can leak out
+     past their own ancestor to paint above these. Each layer's own
+     opacity is its own --plex-*-opacity custom property, kept in sync
+     by that effect's syncXOpacity() depending on its own lock. */
+  .snow-layer-back, .snow-layer-front, .rain-layer-back, .rain-layer-front,
+  .leaves-layer-back, .leaves-layer-front, .halloween-layer-back,
+  .halloween-layer-front, .christmas-layer-back, .christmas-layer-front {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    /* Hardcoded to match .widget-root's own border-radius above (14px)
+       -- see the ::before comment above for why "inherit" doesn't
+       reliably resolve here. */
+    border-radius: 14px;
+    pointer-events: none;
+  }
+
+  /* Each pair below is one visual effect split across two DOM positions
+     (see the JSX around .widget-root -- one layer behind it, one in
+     front, for the "mixed depth" look), not two independent effects, so
+     each pair always fades in/out together on its own single lock.
+     Opacity is the product of three independent 0-1 numbers: --plex-*-
+     opacity (the lock/background-transparency-driven visibility every
+     other layer in this file also has), --*-storm-fade (1 normally,
+     briefly driven to 0 and back by triggerWeatherStormFade whenever
+     Storm is toggled -- see that function's own comment), and
+     --*-enabled-fade (1 normally, driven to 0 and back over
+     WEATHER_ENABLED_FADE_MS by triggerWeatherEnabledFadeOut whenever the
+     effect itself is switched off -- see that function's own comment).
+     The transition: opacity rule is what actually animates any of those
+     dips: changing a custom property doesn't itself animate, but the
+     RESOLVED opacity value changing does, exactly like it would if
+     opacity were set directly. Its OWN duration is a var too
+     (--*-fade-duration) rather than a fixed number, because the storm
+     crossfade and the enabled fade-out share this same opacity
+     property but need very different speeds (a snappy 0.45s vs. a slow
+     4s settle) -- triggerWeatherStormFade/triggerWeatherEnabledFadeOut
+     each set this to their own duration immediately before changing
+     their own fade var, so whichever one just fired is the one that
+     actually plays at its own speed. Defaults to WEATHER_STORM_FADE_MS's
+     0.45s (kept in sync by eye with that constant) since the storm fade
+     doesn't bother setting it itself. */
+  .snow-layer-back, .snow-layer-front {
+    opacity: calc(var(--plex-snow-opacity, 0) * var(--snow-storm-fade, 1) * var(--snow-enabled-fade, 1));
+    transition: opacity var(--snow-fade-duration, 0.45s) ease;
+  }
+  .rain-layer-back, .rain-layer-front {
+    opacity: calc(var(--plex-rain-opacity, 0) * var(--rain-storm-fade, 1) * var(--rain-enabled-fade, 1));
+    transition: opacity var(--rain-fade-duration, 0.45s) ease;
+  }
+  .leaves-layer-back, .leaves-layer-front {
+    opacity: calc(var(--plex-leaves-opacity, 0) * var(--leaves-storm-fade, 1) * var(--leaves-enabled-fade, 1));
+    transition: opacity var(--leaves-fade-duration, 0.45s) ease;
+  }
+  /* Halloween has no Storm mode, so its opacity is just the lock/
+     transparency term times its own enabled-fade -- same idea as the
+     three above, just missing the --*-storm-fade factor. */
+  .halloween-layer-back, .halloween-layer-front {
+    opacity: calc(var(--plex-halloween-opacity, 0) * var(--halloween-enabled-fade, 1));
+    transition: opacity var(--halloween-fade-duration, 0.45s) ease;
+  }
+  /* Christmas has no Storm mode either -- same shape as Halloween's own
+     rule just above. */
+  .christmas-layer-back, .christmas-layer-front {
+    opacity: calc(var(--plex-christmas-opacity, 0) * var(--christmas-enabled-fade, 1));
+    transition: opacity var(--christmas-fade-duration, 0.45s) ease;
+  }
+
+  /* Lightning for Rain's Storm mode -- a white/blue brightening of the
+     whole tile background (like Apple Weather's thunderstorm
+     screen-flash) plus an actual jagged bolt shape crossing the tile at
+     the same instant, rather than just the ambient flash alone.
+     Genuinely random this time -- struck every 5-10s (not a fixed
+     cadence) at a random horizontal spot with a random one of the
+     forked-bolt shapes (see LIGHTNING_BOLT_PATHS), not cycling
+     through the same fixed positions in the same order. True randomness
+     needs a real timer, so unlike every other weather effect in this
+     file (all fixed/index-derived specifically to avoid a JS timer),
+     this ONE is JS-driven -- see scheduleNextLightningStrike/
+     triggerLightningStrike below, called once from init(). It uses the
+     Web Animations API (element.animate()) for a one-shot flicker each
+     strike rather than a looping CSS @keyframes, since "random every
+     5-10s" is inherently a one-off event, not a loop. .lightning-glow/
+     .lightning-bolt below are just the plain positioned elements JS
+     repositions and flashes each time -- there's only one of each now,
+     not four fixed slots. Not tied to --plex-rain-opacity/the rain
+     lock -- it only ever exists in the DOM while rain+storm are both on
+     (see the JSX below), so it always fades with the rest of the widget
+     the same as everything else, on/off with the storm toggle instead
+     of needing its own lock. */
+  .lightning-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: 14px;
+    pointer-events: none;
+  }
+
+  .lightning-glow {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    background: radial-gradient(circle at 50% 30%, rgba(255,255,255,0.95), rgba(210,225,255,0.55) 35%, transparent 68%);
+  }
+
+  /* The bolt itself -- back to a thin stroked hairline crack (not the
+     filled silhouette), forking into two branches, glowing white with a
+     soft blue halo. JS repositions it (left%) and swaps its path's "d"
+     attribute to a random shape each strike -- see
+     triggerLightningStrike below. */
+  .lightning-bolt {
+    position: absolute;
+    left: 50%;
+    top: 2%;
+    height: 96%;
+    width: auto;
+    opacity: 0;
+    transform: translateX(-50%);
+    /* A tight inner glow keeps the hairline itself from thickening, but
+       a bigger, brighter outer bloom layered underneath it makes each
+       strike feel more electric/fierce without touching the stroke
+       width. */
+    filter: drop-shadow(0 0 1.5px rgba(225,238,255,0.95)) drop-shadow(0 0 4px rgba(180,215,255,0.8)) drop-shadow(0 0 9px rgba(150,195,255,0.5));
+  }
+
+  /* A thin jagged crack of light, not a filled icon -- closer to how the
+     iOS Weather app's own storm animation renders a strike. Stroke width
+     is in the SVG's own viewBox units (see renderLightningBolt) --
+     0.08 is deliberately very thin (thinner than this used before), a
+     true hairline rather than a bright bolt icon. */
+  .lightning-bolt path {
+    fill: none;
+    stroke: #f3f9ff;
+    stroke-width: 0.08;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .snowflake, .snowflake-icon, .raindrop, .leaf {
+    position: absolute;
+    animation-name: weather-fall;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  .snowflake {
+    background: #fff;
+    border-radius: 50%;
+  }
+
+  /* The other half of the snow population (see renderSnowflakes' isIcon
+     split) -- an actual six-armed snowflake silhouette (SNOWFLAKE_ICON_
+     PATH, drawn stroke-only like .leaf's vein lines rather than filled)
+     mixed in alongside the plain dots above, not replacing them. */
+  .snowflake-icon path {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 1.4;
+    stroke-linecap: round;
+  }
+
+  /* A small accumulated mound of snow, NOT part of the falling-piece
+     family above (no animation-name from the shared .snowflake/etc.
+     rule, no --weather-fall/--weather-drift). Rest state is just this:
+     invisible (opacity:0) and unscaled -- there's no CSS @keyframes
+     loop driving it anymore (see SNOW_PILE_FRAMES/wireSnowPileTrigger in
+     renderSnowflakes): each pile's actual grow/dwell/melt cycle is
+     played on demand via the Web Animations API, triggered by its own
+     source flake genuinely landing, not on an independent clock, so
+     this rule only needs to describe what the pile looks like at rest
+     between triggers. Sits with its BOTTOM edge on the landing surface
+     (top set per-piece from JS so the top edge grows upward from there,
+     see renderSnowflakes) -- transform-origin: bottom so the grow/melt
+     scaling (SNOW_PILE_FRAMES) stays anchored to that surface instead of
+     expanding from the center. Softly rounded top, flatter bottom --
+     reads as a little drift/mound rather than a perfect circle. */
+  .snow-pile {
+    position: absolute;
+    background: linear-gradient(to bottom, #ffffff, rgba(235, 245, 255, 0.85));
+    border-radius: 50% 50% 35% 35% / 65% 65% 30% 30%;
+    opacity: 0;
+    pointer-events: none;
+    transform-origin: center bottom;
+  }
+
+  /* Overrides the shared animation-name from .snowflake/.raindrop/.leaf
+     above with @keyframes snow-storm-fall (see above) -- added alongside
+     the base .snowflake class (not instead of it) only on storm
+     snowflakes, see renderSnowflakes. */
+  .snowflake-gust {
+    animation-name: snow-storm-fall;
+  }
+
+  /* A short vertical streak rather than a dot -- width/height are set
+     per drop from JS (see renderRaindrops), width always much smaller
+     than height. Overrides the shared animation-name from
+     .snowflake/.raindrop/.leaf above with its own @keyframes rain-fall
+     (see below) -- rain specifically fades in at the top and out at the
+     bottom (both calm and storm), unlike snow/leaves which stay fully
+     opaque the whole way down; drops are small/fast enough that a fade
+     reads as natural rather than as the piece stopping short. */
+  .raindrop {
+    background: linear-gradient(rgba(190, 220, 255, 0), rgba(190, 220, 255, 0.85));
+    border-radius: 1px;
+    animation-name: rain-fall;
+  }
+
+  /* A small ring right where each raindrop actually hits something,
+     synced to that SAME drop's own cycle (identical animationDuration, a
+     computed animationDelay -- see renderRaindrops/
+     RAIN_SPLASH_POP_OFFSET) so it pops right when that drop's own
+     top+fall crosses that surface, not on a generic shared timer.
+     position:absolute with top set per piece from JS (see
+     renderRaindrops/measureWeatherImpactSurfaces) -- either a Now Playing
+     tile's or Recently Added poster's own top edge, or the widget's real
+     floor if nothing's under this drop, NOT wherever the drop happens to
+     be at 100% of its own loop (well past that surface by design -- see
+     renderRaindrops for why the fall distance always overshoots).
+     Invisible the rest of the loop via @keyframes rain-splash below. */
+  .rain-splash {
+    position: absolute;
+    border: 1px solid rgba(200, 225, 255, 0.85);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+    animation-name: rain-splash;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* Invisible for most of the loop -- pops into an expanding-then-fading
+     ring around RAIN_SPLASH_POP_OFFSET (92%), the instant renderRaindrops
+     has already solved this piece's own delay to land on. The very first
+     version of this only had opacity moving between 93% and 100% -- 7%
+     of the piece's own cycle, which at calm rain's ~0.9-1.5s duration is
+     well under a tenth of a second: technically correct (the position
+     math genuinely landed on the right pixel) but so brief it read as
+     "not happening" even in a slow-motion frame-by-frame video review.
+     Widened to a fade-in starting at 78% so the whole visible window is
+     roughly triple that -- still a quick splash, not a lingering puddle,
+     just one an eye actually has a chance to catch. */
+  @keyframes rain-splash {
+    0%, 78% {
+      opacity: 0;
+      transform: scale(0.35);
+    }
+    84% {
+      /* --rain-splash-peak lets storm rain pop dimmer than calm rain
+         (set per piece in renderRaindrops) without needing a second,
+         near-duplicate keyframes block just for the opacity. */
+      opacity: calc(var(--rain-splash-peak, 0.9) * 0.55);
+      transform: scale(0.55);
+    }
+    92% {
+      opacity: var(--rain-splash-peak, 0.9);
+      transform: scale(0.85);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.6);
+    }
+  }
+
+  /* A tiny droplet that bounces up off the surface -- only on a slice of
+     the drops that already splash (see showsBounce in renderRaindrops),
+     same delay-solving trick as .rain-splash so it pops at the same
+     instant as that drop's own splash ring. Small solid dot rather than
+     a ring, since it's meant to read as a piece of water flying up, not
+     another splash. */
+  .rain-bounce {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(205, 228, 255, 0.9);
+    opacity: 0;
+    pointer-events: none;
+    animation-name: rain-bounce;
+    animation-timing-function: ease-out;
+    animation-iteration-count: infinite;
+  }
+
+  /* Pops in with the splash (92%, matching rain-splash's own widened
+     window above), hops up a few px (96%), then settles back down and
+     fades (100%) -- a quick up-and-down flick rather than a real physics
+     arc, same "just enough to read" approach as every other weather
+     piece here, just stretched enough now to actually be seen. */
+  @keyframes rain-bounce {
+    0%, 78% {
+      opacity: 0;
+      transform: translateY(0) scale(0.5);
+    }
+    84% {
+      opacity: 0.5;
+      transform: translateY(0) scale(0.75);
+    }
+    92% {
+      opacity: 0.95;
+      transform: translateY(0) scale(1);
+    }
+    96% {
+      opacity: 0.8;
+      transform: translateY(-8px) scale(0.85);
+    }
+    100% {
+      opacity: 0;
+      transform: translateY(-1px) scale(0.4);
+    }
+  }
+
+  /* An actual cartoon leaf silhouette (SVG, see renderLeaves) rather than
+     a plain shape -- no background/border-radius needed here, the leaf
+     body's fill color and outline are set per piece in the SVG markup
+     itself (see LEAF_COLORS). overflow:visible so the outline stroke
+     isn't clipped at the SVG's own edge. */
+  .leaf {
+    overflow: visible;
+  }
+
+  /* Shared by all three effects above -- falls straight down while
+     drifting steadily to one side (the wind) with a small flutter
+     layered on top for a natural, not-perfectly-diagonal path, plus an
+     optional spin for tumbling leaves. --weather-fall/-drift/-flutter/
+     -spin/-piece-opacity are set per piece from JS (see
+     renderSnowflakes/renderRaindrops/renderLeaves) -- drift's
+     sign/magnitude is where "a little wind" vs. a full snowstorm
+     actually comes from, and --weather-spin defaults to 0deg so snow
+     and rain (which don't set it) simply don't rotate. Opacity stays at
+     the piece's own --weather-piece-opacity for the entire loop --no
+     fading in at the top or out at the bottom -- so every piece is
+     fully present the instant it's on screen instead of ghosting in/out. */
+  @keyframes weather-fall {
+    0% {
+      transform: translate(0, 0) rotate(0deg);
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+    25% {
+      transform: translate(calc(var(--weather-drift) * 0.20 + var(--weather-flutter) * 1), calc(var(--weather-fall) * 0.22)) rotate(calc(var(--weather-spin, 0deg) * 0.22));
+    }
+    45% {
+      transform: translate(calc(var(--weather-drift) * 0.45 + var(--weather-flutter) * -0.8), calc(var(--weather-fall) * 0.46)) rotate(calc(var(--weather-spin, 0deg) * 0.46));
+    }
+    65% {
+      transform: translate(calc(var(--weather-drift) * 0.68 + var(--weather-flutter) * 0.9), calc(var(--weather-fall) * 0.68)) rotate(calc(var(--weather-spin, 0deg) * 0.68));
+    }
+    85% {
+      transform: translate(calc(var(--weather-drift) * 0.88 + var(--weather-flutter) * -0.6), calc(var(--weather-fall) * 0.88)) rotate(calc(var(--weather-spin, 0deg) * 0.88));
+    }
+    100% {
+      transform: translate(var(--weather-drift), var(--weather-fall)) rotate(var(--weather-spin, 0deg));
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+  }
+
+  /* Snowstorm-only variant of weather-fall -- a snow storm should read
+     as actual wind gusting through, not just a faster/harder version of
+     the same steady drift calm snow already has. Same vertical fall and
+     rotation as weather-fall (still driven by --weather-fall/
+     --weather-spin, still a plain linear ramp from 0 to 100% -- gravity
+     doesn't speed up or slow down), but the horizontal motion adds a
+     gust on top of the base drift: --weather-gust scaled by a quarter-
+     sine ease-in curve (0 at the top of the fall, easing up to full
+     strength by the time it lands) -- the wind "catches" the flake and
+     carries it increasingly sideways as it falls. --weather-gust is
+     SIGNED (see renderSnowflakes/snowGustDirection) rather than this
+     keyframe swinging both ways on its own -- an earlier version had
+     each flake sway right-left-right within its own short fall, which
+     read as every flake independently zigzagging rather than one real
+     gust of wind; now the whole storm's wind blows one direction and
+     only changes when Storm is picked again (not on a timer), uniformly,
+     same as it would outside. Sampled at 11 stops (every 10%)
+     -- close enough together that the straight segments between them are
+     imperceptible and it reads as one continuous ease, same lesson as
+     the earlier zigzag fix. Applied via .snowflake-gust below overriding
+     the shared animation-name, storm snowflakes only (see
+     renderSnowflakes) -- calm snow keeps the plain weather-fall drift,
+     untouched. */
+  @keyframes snow-storm-fall {
+    0% {
+      transform: translate(0, 0) rotate(0deg);
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+    10% {
+      transform: translate(calc(var(--weather-drift) * 0.10 + var(--weather-gust) * 0.156), calc(var(--weather-fall) * 0.10)) rotate(calc(var(--weather-spin, 0deg) * 0.10));
+    }
+    20% {
+      transform: translate(calc(var(--weather-drift) * 0.20 + var(--weather-gust) * 0.309), calc(var(--weather-fall) * 0.20)) rotate(calc(var(--weather-spin, 0deg) * 0.20));
+    }
+    30% {
+      transform: translate(calc(var(--weather-drift) * 0.30 + var(--weather-gust) * 0.454), calc(var(--weather-fall) * 0.30)) rotate(calc(var(--weather-spin, 0deg) * 0.30));
+    }
+    40% {
+      transform: translate(calc(var(--weather-drift) * 0.40 + var(--weather-gust) * 0.588), calc(var(--weather-fall) * 0.40)) rotate(calc(var(--weather-spin, 0deg) * 0.40));
+    }
+    50% {
+      transform: translate(calc(var(--weather-drift) * 0.50 + var(--weather-gust) * 0.707), calc(var(--weather-fall) * 0.50)) rotate(calc(var(--weather-spin, 0deg) * 0.50));
+    }
+    60% {
+      transform: translate(calc(var(--weather-drift) * 0.60 + var(--weather-gust) * 0.809), calc(var(--weather-fall) * 0.60)) rotate(calc(var(--weather-spin, 0deg) * 0.60));
+    }
+    70% {
+      transform: translate(calc(var(--weather-drift) * 0.70 + var(--weather-gust) * 0.891), calc(var(--weather-fall) * 0.70)) rotate(calc(var(--weather-spin, 0deg) * 0.70));
+    }
+    80% {
+      transform: translate(calc(var(--weather-drift) * 0.80 + var(--weather-gust) * 0.951), calc(var(--weather-fall) * 0.80)) rotate(calc(var(--weather-spin, 0deg) * 0.80));
+    }
+    90% {
+      transform: translate(calc(var(--weather-drift) * 0.90 + var(--weather-gust) * 0.988), calc(var(--weather-fall) * 0.90)) rotate(calc(var(--weather-spin, 0deg) * 0.90));
+    }
+    100% {
+      transform: translate(calc(var(--weather-drift) + var(--weather-gust)), var(--weather-fall)) rotate(var(--weather-spin, 0deg));
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+  }
+
+  /* Same transform choreography as @keyframes weather-fall above, just
+     for .raindrop specifically -- rain fades in over the first 10% of
+     its fall and back out over the last 15%, instead of staying at
+     constant opacity the way weather-fall now does for snow/leaves. */
+  @keyframes rain-fall {
+    0% {
+      transform: translate(0, 0) rotate(0deg);
+      opacity: 0;
+    }
+    10% {
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+    25% {
+      transform: translate(calc(var(--weather-drift) * 0.20 + var(--weather-flutter) * 1), calc(var(--weather-fall) * 0.22)) rotate(calc(var(--weather-spin, 0deg) * 0.22));
+    }
+    45% {
+      transform: translate(calc(var(--weather-drift) * 0.45 + var(--weather-flutter) * -0.8), calc(var(--weather-fall) * 0.46)) rotate(calc(var(--weather-spin, 0deg) * 0.46));
+    }
+    65% {
+      transform: translate(calc(var(--weather-drift) * 0.68 + var(--weather-flutter) * 0.9), calc(var(--weather-fall) * 0.68)) rotate(calc(var(--weather-spin, 0deg) * 0.68));
+    }
+    85% {
+      transform: translate(calc(var(--weather-drift) * 0.88 + var(--weather-flutter) * -0.6), calc(var(--weather-fall) * 0.88)) rotate(calc(var(--weather-spin, 0deg) * 0.88));
+      opacity: var(--weather-piece-opacity, 0.8);
+    }
+    100% {
+      transform: translate(var(--weather-drift), var(--weather-fall)) rotate(var(--weather-spin, 0deg));
+      opacity: 0;
+    }
+  }
+
+  /* Halloween (Weather menu) -- three independently-optional pieces
+     sharing one master fade (see .halloween-layer-back/-front's opacity
+     rule above): bats flying around, pumpkins/jack-o-lanterns falling
+     like leaves, and black cats walking the stream tiles/floor. Each
+     gets its own class/keyframes below since none of them share
+     weather-fall's straight-down physics except pumpkins. */
+
+  /* A bat's OWN silhouette (wings/ears/body) never changes size or
+     shape -- what varies per bat (see renderBats) is the whole <svg>'s
+     width/height (different size bats) and its flight path. Driven by
+     left (a %, not transform: translateX) specifically so a bat's
+     flight doesn't need the widget's real pixel width measured anywhere
+     -- percentages already resolve against whatever width the layer
+     actually has. The vertical bob rides on top of that same element
+     via transform, which doesn't conflict with left since they're
+     different properties. */
+  .bat {
+    position: absolute;
+    overflow: visible;
+    animation-name: bat-fly;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+  @keyframes bat-fly {
+    0% {
+      left: -12%;
+      transform: translateY(0);
+    }
+    20% {
+      transform: translateY(calc(var(--bat-bob, 6px) * -1));
+    }
+    40% {
+      transform: translateY(0);
+    }
+    60% {
+      transform: translateY(var(--bat-bob, 6px));
+    }
+    80% {
+      transform: translateY(0);
+    }
+    100% {
+      left: 112%;
+      transform: translateY(0);
+    }
+  }
+  /* Each wing flaps on its OWN hinge point (roughly where it meets the
+     body) rather than the whole bat's center -- transform-box: fill-box
+     makes the % origin below resolve against each wing PATH's own
+     bounding box instead of the whole SVG's viewport, so this works
+     without hardcoding either wing's coordinates. Left wing's box runs
+     up to x=21 (its body-side edge, the right side of ITS OWN box) and
+     the right wing's starts at x=27 (its own box's left side) -- see
+     BAT_WING_LEFT/BAT_WING_RIGHT. */
+  .bat-wing {
+    transform-box: fill-box;
+    animation-name: bat-wing-flap;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+  }
+  .bat-wing-left {
+    transform-origin: 100% 50%;
+  }
+  .bat-wing-right {
+    transform-origin: 0% 50%;
+  }
+  @keyframes bat-wing-flap {
+    0%, 100% {
+      transform: scaleY(1);
+    }
+    50% {
+      transform: scaleY(0.3);
+    }
+  }
+
+  /* Ghosts wander the WHOLE widget, not just left-right like the bats
+     (per request: "move all over the widget not just left and right")
+     -- left AND top both move together through a per-ghost sequence of
+     random waypoints (--ghost-x0/-y0 through -x3/-y3, set per piece in
+     renderGhosts), 0% and 100% sharing the same waypoint so the loop
+     closes with no jump/pop when it repeats. A second, independent
+     animation (ghost-flicker) slow-fades each ghost in and out on its
+     own separate schedule (per request: "slow fade intermittently") --
+     two long, gentle dips per cycle at uneven points rather than one
+     steady pulse, so it reads as an occasional, unhurried fade, not a
+     blink. Both animations' own duration/delay are set per-ghost (see
+     renderGhosts) so no two ghosts ever move or fade in lockstep. */
+  .ghost {
+    position: absolute;
+    overflow: visible;
+    animation-name: ghost-float, ghost-flicker;
+    animation-timing-function: ease-in-out, ease-in-out;
+    animation-iteration-count: infinite, infinite;
+  }
+  @keyframes ghost-float {
+    0% {
+      left: var(--ghost-x0, 10%);
+      top: var(--ghost-y0, 20%);
+    }
+    25% {
+      left: var(--ghost-x1, 70%);
+      top: var(--ghost-y1, 55%);
+    }
+    50% {
+      left: var(--ghost-x2, 35%);
+      top: var(--ghost-y2, 85%);
+    }
+    75% {
+      left: var(--ghost-x3, 80%);
+      top: var(--ghost-y3, 15%);
+    }
+    100% {
+      left: var(--ghost-x0, 10%);
+      top: var(--ghost-y0, 20%);
+    }
+  }
+  @keyframes ghost-flicker {
+    0%, 20% {
+      opacity: var(--ghost-opacity, 0.9);
+    }
+    35% {
+      opacity: 0.1;
+    }
+    50%, 70% {
+      opacity: var(--ghost-opacity, 0.9);
+    }
+    88% {
+      opacity: 0.15;
+    }
+    100% {
+      opacity: var(--ghost-opacity, 0.9);
+    }
+  }
+
+  /* Pumpkins/jack-o-lanterns fall exactly like leaves -- same
+     @keyframes weather-fall, same --weather-fall/-drift/-flutter/-spin
+     vars set per piece in renderPumpkins, just a rounder/heavier shape
+     and palette. overflow:visible for the same reason as .leaf (a lit
+     jack-o-lantern's glow filter below would otherwise clip at the
+     SVG's own edge). */
+  .pumpkin {
+    position: absolute;
+    overflow: visible;
+    animation-name: weather-fall;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+  /* Only the ~40% of pumpkins renderPumpkins picks to render lit (with
+     a carved face, see JACK_FACE_PATH) get this warm glow -- plain
+     pumpkins have no filter at all. */
+  .pumpkin-lit {
+    filter: drop-shadow(0 0 3px rgba(255, 195, 80, 0.65)) drop-shadow(0 0 7px rgba(255, 150, 40, 0.35));
+  }
+
+  /* A cat patrols back and forth along ONE real surface -- a stream
+     tile's top edge or a section-divider line, never a poster or a bare
+     floor guess (see renderCats/measureCatSurfaces) -- between
+     --cat-x-start and --cat-x-end (both %, set per cat from JS).
+     Percentage-based left for the same width-measurement reason as
+     .bat above. Two animations run on the same element: cat-walk (the
+     back-and-forth + turn-around flip) and cat-hop (an occasional
+     little jump, see below) -- kept as two separate CSS animations
+     rather than one merged keyframes set specifically so cat-hop can
+     run on its own much longer, independent cycle (see renderCats'
+     hopDuration) without needing to be woven into every lap of the
+     walk itself. */
+  .cat {
+    position: absolute;
+    overflow: visible;
+    animation-name: cat-walk, cat-hop;
+    animation-timing-function: ease-in-out, ease-in-out;
+    animation-iteration-count: infinite, infinite;
+  }
+  /* The cat art (see CAT_* paths) is drawn facing left (head/ears at
+     its own low-x end, tail at the high-x end). Walking from x-start to
+     x-end (rightward) needs it mirrored to face the way it's actually
+     moving; walking back from x-end to x-start (leftward) is already
+     its natural drawn orientation. The 49%/50% and 99%/100% pairs are
+     two keyframes a hair apart with different scale values, which reads
+     as an instant flip right at each turn-around rather than a gradual
+     (and backwards-looking) mirror mid-stride. Uses the scale
+     individual-transform property rather than transform: scaleX() so
+     this can run alongside cat-hop's own translate animation below on
+     the same element without the two fighting over one transform
+     property. ease-in-out on .cat above (not linear) means this also
+     visibly slows into and out of each turn-around instead of the
+     constant robotic speed a plain back-and-forth read as "racing" --
+     see renderCats' own comment on why. */
+  @keyframes cat-walk {
+    0% {
+      left: var(--cat-x-start, 10%);
+      scale: -1 1;
+    }
+    49% {
+      left: var(--cat-x-end, 80%);
+      scale: -1 1;
+    }
+    50% {
+      left: var(--cat-x-end, 80%);
+      scale: 1 1;
+    }
+    99% {
+      left: var(--cat-x-start, 10%);
+      scale: 1 1;
+    }
+    100% {
+      left: var(--cat-x-start, 10%);
+      scale: -1 1;
+    }
+  }
+  /* A quick little hop, then a long rest for the remainder of this
+     animation's own cycle (set per cat to a few multiples of cat-walk's
+     own duration, see renderCats' hopDuration) -- reads as "jumps every
+     once in a while" during the walk rather than every single lap.
+     Animates translate, not transform, specifically so it composes
+     with cat-walk's own scale animation above instead of clobbering
+     it (individual transform properties combine automatically; a plain
+     transform on both would fight over the same property instead). */
+  @keyframes cat-hop {
+    0%, 100% {
+      translate: 0 0;
+    }
+    2% {
+      translate: 0 -5px;
+    }
+    4% {
+      translate: 0 -5px;
+    }
+    6% {
+      translate: 0 0;
+    }
+  }
+
+  /* Christmas (Weather menu) -- three independently-optional pieces
+     sharing one master fade (see .christmas-layer-back/-front's opacity
+     rule above): a Santa + reindeer image that flies across continuously
+     (same always-flying idea as bats, see .bat/@keyframes bat-fly
+     above), falling mistletoe sprigs, and falling colored ornaments.
+     Mistletoe/ornaments reuse @keyframes weather-fall unchanged (same
+     straight-down physics as pumpkins/leaves, see renderMistletoe/
+     renderOrnaments below). */
+
+  /* A real (photo-traced) reindeer team + sleigh silhouette, not a
+     hand-drawn shape like the rest of this file's weather art -- see
+     SANTA_SLEIGH_IMAGE below. Recolored via a CSS mask (mask-image is
+     the silhouette's own alpha channel, background-color is the actual
+     paint) rather than an <img>, so it can take any of
+     SANTA_COLOR_PRESETS instead of being stuck at its own traced-in
+     near-black -- see SANTA_COLOR_PRESETS' own comment. Driven entirely
+     from JS (flySantaLap, via the Web Animations API) rather than a CSS
+     @keyframes loop plus onAnimationIteration nudging custom properties
+     mid-flight -- that older approach left the sleigh's start position
+     dependent on a CSS custom property being re-evaluated exactly right
+     at each loop boundary, which isn't reliably guaranteed (per
+     request: "santa needs to always start off screen" -- this is what
+     actually made that guarantee solid: every lap's from/to values are
+     literal numbers computed once in JS and handed to a brand-new
+     .animate() call, nothing left for the engine to reinterpret
+     mid-loop). See flySantaLap's own comment for the per-lap
+     direction/size/band variation and the .animate() sequencing. */
+  .santa-sleigh {
+    position: absolute;
+    top: 34%;
+    left: -110px;
+    width: 90px;
+    height: 27px;
+    pointer-events: none;
+    background-color: rgb(var(--santa-rgb, 17, 17, 17));
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-size: 100% 100%;
+    -webkit-mask-position: center;
+    mask-repeat: no-repeat;
+    mask-size: 100% 100%;
+    mask-position: center;
+  }
+
+  /* Mistletoe/ornaments/gingerbread/stars all fall exactly like pumpkins
+     -- same @keyframes weather-fall, same
+     --weather-fall/-drift/-flutter/-spin vars set per piece (see
+     renderMistletoe/renderOrnaments/renderGingerbread/renderStars
+     below). */
+  .mistletoe, .ornament, .gingerbread, .star {
+    position: absolute;
+    overflow: visible;
+    animation-name: weather-fall;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  /* North stars glow as they fall -- a currentColor + drop-shadow
+     self-tinting trick, brighter/wider since a star reads as a light
+     source, not a small bulb. */
+  .star {
+    filter: drop-shadow(0 0 2px #fdf1b8) drop-shadow(0 0 4px #fff6cf);
+  }
+
+  /* The Weather button sits inside its own wrapping span (so the
+     dropdown below can anchor off it via position:relative) instead of
+     being a bare .bg-image-btn like its siblings (Hide Logo, Add
+     Photo). display:inline-flex + align-items:center makes that wrapper
+     hug its one visible child exactly the same way a plain flex item
+     would, so it can't end up a hair taller/shorter than its siblings
+     and drift out of line with them in .bg-color-swatches's own
+     align-items:center row. */
+  .weather-btn-wrap {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* The "Weather" button's dropdown -- same dark chip look as the rest
+     of the footer controls, just stacked vertically in a floating
+     panel instead of inline. Anchored off the wrapping span's own
+     position:relative (inline style, right next to the button in the
+     JSX) rather than a dedicated wrapper class. Opens UPWARD (bottom:
+     100%) rather than down, since the button sits at the bottom of the
+     widget -- opening below would run the panel off the widget's own
+     edge. */
+  .weather-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 6px;
+    background: rgba(12, 12, 14, 0.97);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 40;
+  }
+
+  /* .bg-color-swatches defaults to opacity:0 + pointer-events:none for
+     its OTHER use outside this dropdown (the pop-out window's own
+     theme swatches, hover-revealed) -- an ancestor's own opacity always
+     composites its whole subtree, so a descendant setting opacity:1
+     couldn't override that on its own (the same "opacity affects
+     descendants" issue this file has hit before, e.g. the confetti
+     tooltip). This force-visible class overrides that default
+     unconditionally while the Weather menu is open, since it's only
+     ever mounted then. */
+  .bg-color-swatches.bg-color-swatches-force-visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .weather-menu-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .weather-menu-subrow {
+    display: flex;
+    gap: 4px;
+    padding-left: 4px;
+  }
+
+  /* No separate opacity:0/hover-reveal rule needed here, unlike
+     .bg-opacity-slider -- this lives inside .bg-color-swatches, which
+     already handles show/hide for the whole dropdown (hover, or forced
+     via .bg-color-swatches-force-visible above while the menu is open),
+     so its own composited opacity already covers everything nested
+     inside it. */
+  .weather-amount-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 4px;
+  }
+
+  .weather-amount-label {
+    font-size: 9px;
+    color: rgba(255,255,255,0.55);
+    min-width: 24px;
+    text-align: right;
+  }
+
+  .weather-amount-slider {
+    width: 90px;
+    height: 12px;
+    margin: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    background: transparent;
+  }
+
+  .weather-amount-slider::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.18);
+  }
+
+  .weather-amount-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgb(var(--plex-accent-rgb, 229, 160, 13));
+    margin-top: -3.5px;
+    cursor: pointer;
+  }
 
   .row {
     display: flex;
@@ -1346,16 +3611,62 @@ export const className = `
   }
 
   .server-title {
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
     font-family: -apple-system, "SF Pro Rounded", "Helvetica Neue", sans-serif;
     font-weight: 700;
     letter-spacing: 0.01em;
+  }
+
+  .server-title-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .server-title-edit-icon,
+  .server-title-reset-icon {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    color: rgba(255,255,255,0.35);
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease;
+  }
+
+  .server-title-wrap:hover .server-title-edit-icon,
+  .server-title-wrap:hover .server-title-reset-icon {
+    opacity: 1;
+  }
+
+  .server-title-edit-icon:hover,
+  .server-title-reset-icon:hover {
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
+  }
+
+  .server-title-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(var(--plex-accent-rgb, 229, 160, 13), 0.5);
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
+    font-family: -apple-system, "SF Pro Rounded", "Helvetica Neue", sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.01em;
+    padding: 0 0 1px 0;
+    outline: none;
+    min-width: 80px;
+    max-width: 180px;
   }
 
   .row-right {
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .dashboard-content {
+    display: flex;
+    flex-direction: column;
   }
 
   .drag-handle {
@@ -1434,6 +3745,18 @@ export const className = `
     flex-shrink: 0;
   }
 
+  /* The Accent row (see ACCENT_COLOR_PRESETS/the Weather button's own
+     JSX) reuses .bg-color-group as-is (including its justify-self:end
+     from .footer-controls-grid above -- right-aligned, same as the
+     Background row) but is a 5th child of a grid explicitly built for
+     2 rows -- grid-auto-rows' own default (auto-sized, not the fixed
+     12px the first two rows use) already places it sensibly on its own
+     new row; this just widens that row to the grid's full width instead
+     of leaving it squeezed into a single implicit column track. */
+  .footer-controls-grid > .accent-color-group {
+    grid-column: 1 / -1;
+  }
+
   .bg-color-label {
     font-size: 9px;
     color: rgba(255,255,255,0.4);
@@ -1471,6 +3794,44 @@ export const className = `
   .bg-color-swatch-selected {
     border-color: #E5A00D;
     border-width: 2px;
+  }
+
+  /* Lives alongside the color swatches inside .bg-color-swatches (both
+     the main widget's and the pop-out's), so it inherits that
+     container's existing hover-to-reveal opacity/pointer-events instead
+     of needing its own copy of that rule. */
+  .bg-image-btn {
+    font-size: 9px;
+    /* Fixed line-height so a button whose label starts with an emoji
+       (like the Weather button's own 🌦️, or Locked/Unlocked's 🔒/🔓)
+       renders the exact same box height as a plain-text button next to
+       it -- emoji glyphs commonly carry taller line-box metrics than
+       the text font at the same font-size even with align-items:center
+       on the flex row, which is what made the Weather button look out
+       of line with its plain-text siblings (Hide Logo, Add Photo). */
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .bg-image-btn:hover {
+    background: rgba(255,255,255,0.16);
+    color: #fff;
+  }
+
+  .bg-image-remove-btn {
+    padding: 2px 5px;
+    color: rgba(255,255,255,0.5);
+  }
+
+  .bg-image-remove-btn:hover {
+    background: rgba(220,60,60,0.3);
+    color: #fff;
   }
 
   .hidden-sections-group {
@@ -1541,7 +3902,7 @@ export const className = `
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: #E5A00D;
+    background: rgb(var(--plex-accent-rgb, 229, 160, 13));
     margin-top: -3.5px;
     cursor: pointer;
   }
@@ -1561,7 +3922,7 @@ export const className = `
      no pulsing here (unlike Now Playing/newly-added posters), since this
      reflects a steady, ongoing state rather than a transient event. */
   .avatar-online {
-    box-shadow: 0 0 4px 1px rgba(229, 160, 13, 0.6), 0 0 10px 2px rgba(229, 160, 13, 0.45);
+    box-shadow: 0 0 4px 1px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.6), 0 0 10px 2px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.45);
   }
 
   .dot {
@@ -1619,6 +3980,22 @@ export const className = `
     z-index: 0;
   }
 
+  /* .rain-layer/.lightning-layer now paint AFTER .widget-root (see the
+     JSX below .widget-root's own closing tag) so rain/splashes show up
+     on top of tiles and posters instead of hidden behind them -- but
+     that means .widget-root's own internal overlays that are supposed
+     to sit above everything (the Weather menu at z-index 40, the
+     streams popout at z-index 9000) would otherwise end up buried under
+     rain/lightning too, since z-index only ranks siblings within the
+     SAME stacking context and .widget-root is its own. This class bumps
+     .widget-root itself above .rain-layer/.lightning-layer for exactly
+     as long as one of those two is actually open (see the widget-root
+     className above), putting the whole stacking context back on top
+     without touching any of the z-index values inside it.  */
+  .widget-root-elevated {
+    z-index: 2;
+  }
+
   /* Sits above the outer card's own background fill (so it stays
      visible no matter how opaque the background slider is set) but
      behind every real piece of content, thanks to .widget-root above
@@ -1627,7 +4004,7 @@ export const className = `
     display: flex;
     align-items: flex-end;
     height: 18px;
-    opacity: 0.7;
+    opacity: 1;
     cursor: pointer;
     transition: opacity 0.15s ease;
   }
@@ -1695,7 +4072,7 @@ export const className = `
   }
 
   .header-logo-icon:hover {
-    opacity: 1;
+    opacity: 0.7;
   }
 
   /* Absolutely positioned (not in normal flow) in the same top-right
@@ -1786,7 +4163,7 @@ export const className = `
     margin-top: 2px;
     font-size: 9px;
     letter-spacing: 0.02em;
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
   }
 
   .scroll-more-arrow {
@@ -1803,12 +4180,12 @@ export const className = `
     flex-shrink: 0;
     height: 1px;
     margin-top: 12px;
-    background: rgba(229, 160, 13, 0.25);
+    background: rgba(var(--plex-accent-rgb, 229, 160, 13), 0.25);
   }
 
   .media-row-content {
     position: relative;
-    z-index: 1;
+    z-index: 3;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -2007,11 +4384,11 @@ export const className = `
   }
 
   .recent-group-title.scanning {
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
   }
 
   .scan-spinner {
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
     margin-left: 4px;
     flex-shrink: 0;
     animation: refresh-spin 0.9s linear infinite;
@@ -2046,6 +4423,120 @@ export const className = `
        have no backdrop art at all, so without this the row itself was
        exactly as see-through as the widget's own background slider. */
     background: rgb(30, 30, 32);
+  }
+
+  /* Today's top-user celebration -- .media-row above already has
+     position:relative + overflow:hidden, so inset:0 here clips the
+     pieces to the tile's own rounded box for free, same trick as
+     .stream-tile-tooltip just below. Sits under that tooltip's z-index
+     15 so the hover popover still fully covers it, and pointer-events
+     stays off the whole layer (inherited by the pieces) so it never
+     interferes with clicking the tile underneath. */
+  .confetti-layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 12;
+  }
+
+  /* Plain rain, no burst -- see CONFETTI_PIECE_COUNT's own comment. Each
+     piece gets its own random-looking starting row (JS sets "top", not
+     this class) so they're scattered throughout the tile rather than all
+     originating from one spot, then falls straight down while swaying
+     side to side and flickering, looping forever while its tile keeps
+     this layer mounted. --confetti-fall/-sway are set per piece from JS
+     (fall distance, sway width); the shape (position/color/size) is per
+     piece too, inline, since a single shared class can't vary those per
+     instance. Every piece shares this one keyframe, but since each has
+     its own animation-duration/-delay (set from JS) they hit the same
+     relative zigzag/flicker steps at different wall-clock moments --
+     that desync is what reads as "random" rather than a single class
+     needing actual per-frame randomness, which CSS can't do anyway. */
+  .confetti-piece {
+    position: absolute;
+    /* Square, not round -- no border-radius. At this size even a 1px
+       radius was rounding enough of the corners to read as a dot. */
+    opacity: 0;
+    animation-name: confetti-rain;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+  }
+
+  @keyframes confetti-rain {
+    0% {
+      transform: translate(0, 0) rotate(0deg);
+      opacity: 0;
+    }
+    6% {
+      opacity: 1;
+    }
+    13% {
+      transform: translate(calc(var(--confetti-sway) * 0.5), calc(var(--confetti-fall) * 0.10)) rotate(45deg);
+      opacity: 0.15;
+    }
+    21% {
+      opacity: 1;
+    }
+    29% {
+      transform: translate(calc(var(--confetti-sway) * -0.9), calc(var(--confetti-fall) * 0.30)) rotate(95deg);
+      opacity: 0.9;
+    }
+    37% {
+      opacity: 0.2;
+    }
+    45% {
+      transform: translate(calc(var(--confetti-sway) * 0.8), calc(var(--confetti-fall) * 0.48)) rotate(150deg);
+      opacity: 1;
+    }
+    55% {
+      opacity: 0.35;
+    }
+    64% {
+      transform: translate(calc(var(--confetti-sway) * -0.6), calc(var(--confetti-fall) * 0.68)) rotate(215deg);
+      opacity: 1;
+    }
+    73% {
+      opacity: 0.15;
+    }
+    82% {
+      transform: translate(calc(var(--confetti-sway) * 0.7), calc(var(--confetti-fall) * 0.85)) rotate(270deg);
+      opacity: 0.9;
+    }
+    91% {
+      opacity: 0.25;
+    }
+    100% {
+      transform: translate(0, var(--confetti-fall)) rotate(340deg);
+      opacity: 0;
+    }
+  }
+
+  /* Small-tile info popover: everything dropped from the compact tile
+     layout (episode/movie line, device+IP, remaining/total/ends,
+     resolution/audio/HW/speed, added date) surfaces here on hover
+     instead. Covers the tile itself (inset:0) rather than extending
+     past its edges, since .media-row above clips overflow -- content
+     below the fold just scrolls inside the popover. */
+  .stream-tile-tooltip {
+    position: absolute;
+    inset: 0;
+    background: rgba(12, 12, 14, 0.97);
+    border-radius: inherit;
+    padding: 10px 12px;
+    font-size: 11px;
+    line-height: 1.6;
+    color: rgba(255,255,255,0.75);
+    overflow-y: auto;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 15;
+  }
+
+  .media-row:hover .stream-tile-tooltip {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .media-row-empty {
@@ -2147,7 +4638,33 @@ export const className = `
        own box-shadow keyframes take over from this static one while
        it's running. box-shadow instead of a real border so it doesn't
        add to the poster's box size and nudge the layout. */
-    box-shadow: 0 0 0 1px rgba(229, 160, 13, 0.9);
+    box-shadow: 0 0 0 1px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.9);
+    /* Fluid hover zoom -- position:relative + the transition here, the
+       actual scale + z-index bump live on :hover below. A smooth
+       ease-out (no bounce/overshoot) is what reads as "fluid" rather
+       than springy. */
+    position: relative;
+    transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* 1.15x keeps the growth (~3px horizontally, ~4.5px vertically off a
+     40x60 poster) safely inside the .recent-row-viewport padding above,
+     which was already verified to give a poster that much bleed room
+     before overflow:hidden clips it. z-index (paired with position:
+     relative above) makes sure the growing poster paints over its
+     neighbors in the row instead of tucking under whichever one comes
+     later in the DOM. */
+  .recent-poster:hover {
+    transform: scale(1.15);
+    z-index: 5;
+  }
+
+  /* Album/track art -- square like a CD or vinyl sleeve, not the tall
+     2:3 movie-poster box. Width stays the same 40px as everything else
+     in the row (so the 56px-per-item paging math above is untouched),
+     just the height is squared off to match it. */
+  .recent-poster-music {
+    height: 40px;
   }
 
   /* Same pulsing Plex-orange glow as an actively playing tile, applied
@@ -2165,10 +4682,10 @@ export const className = `
      as anything on a small poster. */
   @keyframes poster-glow-pulse {
     0%, 100% {
-      box-shadow: 0 0 2px 1px rgba(229, 160, 13, 0.6), 0 0 5px 1px rgba(229, 160, 13, 0.45);
+      box-shadow: 0 0 2px 1px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.6), 0 0 5px 1px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.45);
     }
     50% {
-      box-shadow: 0 0 3px 1px rgba(229, 160, 13, 0.9), 0 0 10px 2px rgba(229, 160, 13, 0.8);
+      box-shadow: 0 0 3px 1px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.9), 0 0 10px 2px rgba(var(--plex-accent-rgb, 229, 160, 13), 0.8);
     }
   }
 
@@ -2217,6 +4734,7 @@ export const className = `
     gap: 4px;
     white-space: nowrap;
   }
+
 
   /* Centered on .media-row's top-right corner -- inset a few px so the
      circle stays fully inside the row's own rounded corner/overflow:hidden
@@ -2290,9 +4808,61 @@ export const className = `
   .user-name { font-weight: 700; color: #f2f2f2; }
 
   .multi-stream-alert {
+    position: relative;
     margin-left: 5px;
     font-size: 11px;
     cursor: default;
+  }
+
+  /* The blink lives on this inner span, not on .multi-stream-alert
+     itself -- opacity on an ancestor composites its whole rendered
+     subtree, so animating it on the outer wrapper was also fading the
+     tooltip below in and out along with the icon (the same "opacity
+     affects descendants" gotcha as the dashboard-hide feature
+     elsewhere in this file). Keeping the animation scoped to just the
+     icon lets it keep blinking through a hover completely independently
+     of the tooltip's own quick, ordinary show/hide fade. */
+  .multi-stream-alert-icon {
+    animation: caution-blink 3.5s ease-in-out infinite;
+  }
+
+  @keyframes caution-blink {
+    0%, 100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.15;
+    }
+  }
+
+  /* Custom tooltip rather than relying on the native title="" bubble --
+     that one is invisible/unreliable in Übersicht's chromeless overlay
+     window. Positioned below the icon (not above) since the icon sits
+     near the top of the tile and .media-row clips overflow -- below
+     stays safely inside the tile's own box, above would get clipped
+     right at the tile's top edge. */
+  .multi-stream-alert-tooltip {
+    position: absolute;
+    top: 100%;
+    right: -4px;
+    margin-top: 6px;
+    background: rgba(12, 12, 14, 0.97);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 400;
+    line-height: 1.4;
+    padding: 5px 8px;
+    border-radius: 5px;
+    white-space: nowrap;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 50;
+  }
+
+  .multi-stream-alert:hover .multi-stream-alert-tooltip {
+    opacity: 1;
   }
 
   .ip-link {
@@ -2356,8 +4926,46 @@ export const className = `
 
   .bar-fill {
     height: 100%;
-    background: #E5A00D;
+    background: rgb(var(--plex-accent-rgb, 229, 160, 13));
     flex-shrink: 0;
+  }
+
+  .sonarr-health-item {
+    font-size: 10px;
+    padding: 2px 0;
+  }
+
+  .sonarr-health-item.warning { color: #E5A00D; }
+  .sonarr-health-item.error { color: #ff5f56; }
+
+  .sonarr-queue-item {
+    margin: 4px 0;
+  }
+
+  .sonarr-queue-title {
+    font-size: 10px;
+    color: rgba(255,255,255,0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sonarr-queue-meta {
+    font-size: 9px;
+    color: rgba(255,255,255,0.4);
+    margin-top: 1px;
+  }
+
+  .sonarr-upcoming-item {
+    font-size: 10px;
+    color: rgba(255,255,255,0.65);
+    padding: 1px 0;
+  }
+
+  .sonarr-empty {
+    font-size: 10px;
+    color: rgba(255,255,255,0.35);
+    padding: 4px 0;
   }
 
   /* The solid line is actual playback position; there's no real
@@ -2371,7 +4979,7 @@ export const className = `
 
   .bar-buffer {
     height: 100%;
-    background: #E5A00D;
+    background: rgb(var(--plex-accent-rgb, 229, 160, 13));
     flex-shrink: 0;
     animation: bar-buffer-pulse 1.4s ease-in-out infinite;
   }
@@ -2390,7 +4998,7 @@ export const className = `
   }
 
   .count-value {
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
   }
 
   .count-pill-link {
@@ -2402,11 +5010,11 @@ export const className = `
   }
 
   .count-pill.scanning {
-    background: rgb(56, 44, 19);
+    background: rgba(var(--plex-accent-rgb, 229, 160, 13), 0.22);
   }
 
   .count-pill.scanning .count-pill-link {
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
   }
 
   .refresh-btn {
@@ -2454,7 +5062,7 @@ export const className = `
     height: 0px;
     overflow: hidden;
     opacity: 0;
-    color: #E5A00D;
+    color: rgb(var(--plex-accent-rgb, 229, 160, 13));
     font-size: 9px;
   }
 
@@ -2522,7 +5130,7 @@ export const className = `
     min-height: 2px;
   }
 
-  .bandwidth-bar.local { background: #E5A00D; }
+  .bandwidth-bar.local { background: rgb(var(--plex-accent-rgb, 229, 160, 13)); }
   .bandwidth-bar.remote { background: #5aaaff; }
 
   .bandwidth-bar.overlay {
@@ -2570,7 +5178,7 @@ export const className = `
     opacity: 1;
   }
 
-  .bw-tooltip-local { color: #E5A00D; }
+  .bw-tooltip-local { color: rgb(var(--plex-accent-rgb, 229, 160, 13)); }
   .bw-tooltip-remote { color: #5aaaff; }
 
   .overlay-toggle {
@@ -2587,6 +5195,20 @@ export const className = `
     text-decoration: underline;
   }
 
+  /* The Confetti toggle, tucked into the Activity section's own
+     counts-row (Plays Today/Top Title/Top User) rather than the
+     Settings footer row -- same hover-to-reveal idea as .overlay-toggle
+     just above, pushed to the row's far end since it's not a count. */
+  .counts-row-confetti-btn {
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .counts-row:hover .counts-row-confetti-btn {
+    opacity: 1;
+  }
+
   .bw-legend {
     display: inline-flex;
     align-items: center;
@@ -2600,7 +5222,7 @@ export const className = `
     display: inline-block;
   }
 
-  .bw-legend-dot.local { background: #E5A00D; }
+  .bw-legend-dot.local { background: rgb(var(--plex-accent-rgb, 229, 160, 13)); }
   .bw-legend-dot.remote { background: #5aaaff; }
 
   .bw-value {
@@ -2769,6 +5391,499 @@ export const className = `
     cursor: pointer;
     text-decoration: underline;
   }
+
+  .popout-trigger-btn {
+    cursor: pointer;
+    color: rgba(255,255,255,0.35);
+    padding: 2px 3px;
+    margin-right: 2px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .popout-trigger-btn:hover {
+    color: #E5A00D;
+  }
+
+  .streams-popout-overlay {
+    position: fixed;
+    /* Draggable/resizable position+size when not fullscreen -- these
+       read from --popout-* custom properties on <html>, set imperatively
+       by startPopoutDrag/startPopoutResize the same way the main
+       widget's own position/width are, and default to a 40px margin on
+       all sides until the user first drags or resizes it. */
+    top: var(--popout-pos-top, 40px);
+    left: var(--popout-pos-left, 40px);
+    width: var(--popout-width, calc((100vw - 80px) / 2));
+    height: var(--popout-height, calc((100vh - 80px) / 2));
+    /* Its own independent theming -- --popout-bg-color-rgb /
+       --popout-bg-opacity, set by the pop-out's own hover-revealed
+       controls in the header, entirely separate from the main widget's
+       footer controls. */
+    /* Same "locked photo (mode 1) + faded ::before photo (mode 2)" pair
+       as the main widget's own className above -- see there for the
+       full explanation -- using this pop-out's own independent
+       --popout-bg-image-locked / --popout-bg-image-unlocked /
+       --popout-bg-color-rgb / --popout-bg-opacity properties. */
+    background-color: transparent;
+    background-image:
+      linear-gradient(rgba(var(--popout-bg-color-rgb, 18, 18, 20), var(--popout-bg-opacity, 0)), rgba(var(--popout-bg-color-rgb, 18, 18, 20), var(--popout-bg-opacity, 0))),
+      var(--popout-bg-image-locked, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    z-index: 9000;
+    display: flex;
+    flex-direction: column;
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      /* Hardcoded to match this element's own border-radius above (12px)
+         -- see the main widget's own ::before for why "inherit" doesn't
+         reliably resolve here. */
+      border-radius: 12px;
+      pointer-events: none;
+      background-image: var(--popout-bg-image-unlocked, none);
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      opacity: var(--popout-bg-opacity, 0);
+    }
+    /* Explicitly re-enable clicks -- the outer widget card sets
+       pointer-events:none on itself while the dashboard is hidden, and
+       pointer-events inherits down the DOM tree regardless of this
+       overlay's position:fixed, so without this override the pop-out
+       would go dead right along with the hidden dashboard. */
+    pointer-events: auto;
+  }
+
+  .streams-popout-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-radius: inherit;
+  }
+
+  .streams-popout-behind {
+    z-index: -1;
+  }
+
+  .streams-popout-fullscreen {
+    /* Genuinely fullscreen -- the Dock-detection approaches (screen.avail*,
+       then a live NSScreen.visibleFrame query via osascript) both proved
+       unreliable in practice, so this just covers the whole screen. The
+       Dock still auto-raises above it on hover/mouse-to-edge as normal. */
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+  }
+
+  .streams-popout-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    padding: 14px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+    gap: 12px;
+  }
+
+  .streams-popout-header-left {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .streams-popout-title {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .streams-popout-count {
+    font-size: 12px;
+  }
+
+  .streams-popout-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    flex-shrink: 0;
+    justify-content: flex-end;
+  }
+
+  .streams-popout-size-group {
+    display: flex;
+    gap: 2px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 6px;
+    padding: 2px;
+  }
+
+  .streams-popout-columns-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .streams-popout-size-btn {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: rgba(255,255,255,0.55);
+  }
+
+  .streams-popout-size-btn.active {
+    background: #E5A00D;
+    color: #000;
+    font-weight: 600;
+  }
+
+  .streams-popout-btn {
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    padding: 4px 10px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+  }
+
+  .streams-popout-btn:hover {
+    color: #fff;
+    border-color: rgba(255,255,255,0.35);
+  }
+
+  .streams-popout-restore-btn {
+    color: #E5A00D;
+    border-color: rgba(229,160,13,0.4);
+  }
+
+  .streams-popout-restore-btn:hover {
+    color: #fff;
+    border-color: #E5A00D;
+    background: rgba(229,160,13,0.15);
+  }
+
+  .streams-popout-header-logo {
+    display: flex;
+    align-items: flex-end;
+    height: 18px;
+    opacity: 1;
+    cursor: pointer;
+    transition: opacity 0.15s ease;
+  }
+
+  .streams-popout-header-logo:hover {
+    opacity: 0.7;
+  }
+
+  .popout-drag-handle {
+    cursor: move;
+    font-size: 13px;
+    line-height: 1;
+    color: rgba(255,255,255,0.35);
+    user-select: none;
+    transition: color 0.15s ease;
+  }
+
+  .popout-drag-handle:hover {
+    color: rgba(255,255,255,0.75);
+  }
+
+  .popout-resize-handle {
+    position: absolute;
+    right: 10px;
+    bottom: 8px;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-end;
+    cursor: nwse-resize;
+    font-size: 11px;
+    line-height: 1;
+    user-select: none;
+    z-index: 10;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .streams-popout-overlay:hover .popout-resize-handle {
+    opacity: 0.35;
+  }
+
+  .popout-resize-handle:hover {
+    opacity: 0.75;
+  }
+
+  .streams-popout-theme-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .streams-popout-theme-group .bg-opacity-group {
+    margin-left: 0;
+  }
+
+  .streams-popout-theme-group .bg-opacity-label,
+  .streams-popout-theme-group .bg-color-label {
+    min-width: 0;
+  }
+
+  .streams-popout-theme-group .bg-opacity-label,
+  .streams-popout-theme-group .bg-opacity-value,
+  .streams-popout-theme-group .bg-opacity-slider,
+  .streams-popout-theme-group .bg-color-label,
+  .streams-popout-theme-group .bg-color-swatches {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+
+  .streams-popout-theme-group:hover .bg-opacity-label,
+  .streams-popout-theme-group:hover .bg-opacity-value,
+  .streams-popout-theme-group:hover .bg-opacity-slider,
+  .streams-popout-theme-group:hover .bg-color-label,
+  .streams-popout-theme-group:hover .bg-color-swatches {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .streams-popout-theme-group .bg-opacity-slider {
+    width: 70px;
+  }
+
+  .streams-popout-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+  }
+
+  .streams-popout-search {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 11px;
+    padding: 5px 8px;
+    width: 180px;
+    outline: none;
+  }
+
+  .streams-popout-search:focus {
+    border-color: rgba(229, 160, 13, 0.6);
+  }
+
+  .streams-popout-search::placeholder {
+    color: rgba(255,255,255,0.35);
+  }
+
+  .streams-popout-select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    color: rgba(255,255,255,0.85);
+    font-size: 11px;
+    padding: 5px 6px;
+    outline: none;
+    cursor: pointer;
+  }
+
+  .streams-popout-toggle-chip {
+    font-size: 11px;
+    color: rgba(255,255,255,0.55);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 4px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .streams-popout-toggle-chip.active {
+    background: rgba(229, 160, 13, 0.18);
+    border-color: rgba(229, 160, 13, 0.6);
+    color: #E5A00D;
+  }
+
+  .streams-popout-clear-btn {
+    font-size: 11px;
+    color: #ff5f56;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .streams-popout-clear-btn:hover {
+    text-decoration: underline;
+  }
+
+  .streams-popout-sort-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .streams-popout-sort-label {
+    font-size: 11px;
+    color: rgba(255,255,255,0.45);
+  }
+
+  .streams-popout-sort-dir-btn {
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    padding: 4px 7px;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+  }
+
+  .streams-popout-sort-dir-btn:hover {
+    color: #fff;
+    border-color: rgba(255,255,255,0.35);
+  }
+
+  .streams-popout-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 18px;
+  }
+
+  .streams-popout-empty {
+    padding: 40px;
+    text-align: center;
+  }
+
+  .streams-popout-grid {
+    display: grid;
+    gap: 16px;
+  }
+
+  /* Tiles grow/shrink to match the pop-out's actual width (minmax(...,
+     1fr) rather than a fixed size) -- auto-fit (not auto-fill) matters
+     here: auto-fill reserves a column track for every column that WOULD
+     fit at the minmax floor even when there aren't enough tiles to fill
+     them, and since every column is 1fr those phantom empty tracks still
+     claim their share of the leftover space, so real tiles quietly end
+     up narrower than they should. auto-fit collapses unused tracks to 0
+     width so the real tiles always get 100% of the available space. The
+     one trade-off: the moment the pop-out gets wide enough to fit one
+     more column, existing tiles on that row snap to the new column
+     count's width instead of growing smoothly through that point --
+     inherent to any multi-column CSS grid, not something to chase
+     further here. */
+  .streams-popout-grid-small {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .streams-popout-grid-medium {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  }
+
+  .streams-popout-grid-large {
+    grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+  }
+
+  .streams-popout-grid .media-row {
+    margin-bottom: 0;
+  }
+
+  /* The avatar is absolutely positioned (top:8/right:8, 26x26) outside
+     the normal flex flow, so the title's own ellipsis truncation has no
+     idea it's there -- at grid widths much narrower than the list view's
+     ~480px this let long titles' ellipsis land right under the avatar.
+     Reserving the same width+inset as real space fixes it everywhere. */
+  .streams-popout-grid .item {
+    padding-right: 36px;
+  }
+
+  .streams-popout-grid-small .media-row {
+    font-size: 11px;
+  }
+
+  .streams-popout-grid-small .poster-large {
+    width: 32px;
+    height: 48px;
+  }
+
+  .streams-popout-grid-small .item-title {
+    font-size: 12px;
+  }
+
+  .streams-popout-grid-small .muted {
+    font-size: 10px;
+  }
+
+  .streams-popout-grid-small .stream-meta-row {
+    font-size: 10px;
+  }
+
+  /* .media-row-stacked: a square-ish card -- big poster on top, info
+     below -- instead of the default horizontal poster-left row. Same
+     markup as every other tile, just re-flowed: .media-row-content's DOM
+     order is poster then .media-body, so switching it to flex-direction:
+     column stacks them top-to-bottom for free. .media-body gets
+     align-self: stretch so its own rows (the title, the Stop-button meta
+     row with its space-between) still fill the card's full width instead
+     of shrink-wrapping to their own content the way align-items: center
+     would otherwise leave them. Medium uses this as its normal look
+     (see the "stacked" flag below); large only switches to it once a
+     forced low column count squeezes it narrower than the horizontal
+     layout can comfortably hold -- full info stays visible either way,
+     just reflowed vertically instead of the compact/hover-tooltip
+     treatment small (and a *very* squeezed medium) fall back to. */
+  .media-row-stacked .media-row-content {
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .media-row-stacked .media-body {
+    align-self: stretch;
+    flex: none;
+  }
+
+  .streams-popout-grid-medium .media-row-stacked .poster-large {
+    width: 130px;
+    height: 195px;
+  }
+
+  .streams-popout-grid-large .poster-large {
+    width: 60px;
+    height: 90px;
+  }
+
+  .streams-popout-grid-large .media-row-stacked .poster-large {
+    width: 150px;
+    height: 225px;
+  }
+
+  .streams-popout-grid-large .item-title {
+    font-size: 14px;
+  }
+
+  .streams-popout-grid-large .muted {
+    font-size: 12px;
+  }
 `;
 
 // Manual animation for the bandwidth graph: CSS transitions on an SVG
@@ -2925,7 +6040,7 @@ function renderBandwidthAxis() {
 // order is persisted to its own dotfile (same pattern as widget position)
 // so it survives Übersicht restarts.
 const SECTION_ORDER_FILE = "~/.plex_widget_section_order";
-const DEFAULT_SECTION_ORDER = ["nowPlaying", "recentAdded", "activity", "system"];
+const DEFAULT_SECTION_ORDER = ["nowPlaying", "recentAdded", "activity", "system", "sonarr"];
 
 function moveSection(order, key, delta) {
   const idx = order.indexOf(key);
@@ -2978,13 +6093,56 @@ function moveRecentCategoryAndDispatch(currentKeys, key, delta) {
   persistRecentCategoryOrder(newOrder);
 }
 
-// Pages a category's poster row 4 at a time (delta -1/+1), clamped so
-// the window never runs past either end of however many items that
-// category actually has right now (which can shrink after a refresh).
-function movePosterPageAndDispatch(key, offset, itemsLength, delta) {
+// Moves a category's poster row by an arbitrary number of items
+// (positive or negative), clamped so the window never runs past either
+// end of however many items that category actually has right now (which
+// can shrink after a refresh). Shared by the page arrows (which move a
+// full page of 4 at a time) and wheel/trackpad scrolling (which moves
+// one item at a time, see onRecentRowWheel below).
+function movePosterByAndDispatch(key, offset, itemsLength, itemsToMove) {
   const maxOffset = Math.max(0, itemsLength - 4);
-  const newOffset = Math.max(0, Math.min(maxOffset, offset + delta * 4));
+  const newOffset = Math.max(0, Math.min(maxOffset, offset + itemsToMove));
   if (dispatchRef) dispatchRef({ type: "RECENT_POSTER_PAGE", key, offset: newOffset });
+}
+
+// Pages a category's poster row 4 at a time (delta -1/+1).
+function movePosterPageAndDispatch(key, offset, itemsLength, delta) {
+  movePosterByAndDispatch(key, offset, itemsLength, delta * 4);
+}
+
+// One item's worth of horizontal scroll distance -- matches the 56px
+// (40px poster + 16px gap) step the translateX above moves per item.
+const POSTER_WHEEL_ITEM_PX = 56;
+// Leftover wheel/trackpad delta that hasn't added up to a full item yet,
+// per category (key) -- so a string of small trackpad ticks accumulates
+// into whole-item moves instead of each tiny tick being dropped on the
+// floor (or, worse, each one moving a whole item and making the scroll
+// feel far too fast).
+const posterWheelAccum = {};
+
+// Lets the mouse wheel or a trackpad's two-finger scroll page through a
+// category's posters, on top of the existing ‹ › arrows. Trackpads
+// report a horizontal swipe as deltaX; a plain mouse wheel only ever
+// reports deltaY -- use whichever axis is actually carrying the input.
+function onRecentRowWheel(e, key, offset, itemsLength) {
+  const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  if (delta === 0) return;
+  const maxOffset = Math.max(0, itemsLength - 4);
+  if ((offset <= 0 && delta < 0) || (offset >= maxOffset && delta > 0)) {
+    // Already at an end and still being scrolled further that way --
+    // swallow the event (so the page behind the widget doesn't scroll
+    // instead) but don't let it build up in the accumulator, or the row
+    // would need an equally large scroll the other way before it starts
+    // moving again.
+    e.preventDefault();
+    posterWheelAccum[key] = 0;
+    return;
+  }
+  e.preventDefault();
+  const accum = (posterWheelAccum[key] || 0) + delta;
+  const itemsToMove = Math.trunc(accum / POSTER_WHEEL_ITEM_PX);
+  posterWheelAccum[key] = accum - itemsToMove * POSTER_WHEEL_ITEM_PX;
+  if (itemsToMove !== 0) movePosterByAndDispatch(key, offset, itemsLength, itemsToMove);
 }
 
 async function loadSavedRecentCategoryOrder(dispatch) {
@@ -3021,6 +6179,7 @@ const SECTION_LABELS = {
   recentAdded: "Recently Added",
   activity: "Activity",
   system: "Bandwidth & CPU",
+  sonarr: "Sonarr",
 };
 
 function persistHiddenSections(keys) {
@@ -3101,6 +6260,662 @@ async function loadSavedBandwidthOverlay(dispatch) {
   }
 }
 
+// Hides the StreamPulse logo/heartbeat icon in the main widget's top
+// right corner (the pop-out keeps its own, independent logo/About
+// access either way -- see streams-popout-header-logo).
+const LOGO_HIDDEN_FILE = "~/.plex_widget_logo_hidden";
+
+async function loadSavedLogoHidden(dispatch) {
+  try {
+    const out = await run(`cat ${LOGO_HIDDEN_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_LOGO" });
+  } catch (e) {
+    // no saved preference yet — shown by default
+  }
+}
+
+// Whether the top-user confetti (see .confetti-layer below) is allowed to
+// show at all. Opposite default from the toggles above -- this one starts
+// on, so the saved file only ever needs to exist to turn it OFF, and the
+// dispatch here only fires to flip the initialState default of true down
+// to false, never the other way.
+const CONFETTI_ENABLED_FILE = "~/.plex_widget_confetti_enabled";
+
+async function loadSavedConfettiEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${CONFETTI_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_CONFETTI" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+// --- Background snow (Weather menu) --------------------------------------
+// Same dotfile-persisted on/off pair as the toggles above.
+const SNOW_ENABLED_FILE = "~/.plex_widget_snow_enabled";
+const SNOW_STORM_FILE = "~/.plex_widget_snow_storm";
+
+async function loadSavedSnowEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${SNOW_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_SNOW" });
+  } catch (e) {
+    // no saved preference yet — off by default
+  }
+}
+
+async function loadSavedSnowStorm(dispatch) {
+  try {
+    const out = await run(`cat ${SNOW_STORM_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") {
+      dispatch({ type: "TOGGLE_SNOW_STORM" });
+      // Also swap snowStormDisplayed to match immediately -- this is the
+      // very first load, nothing's on screen yet to fade, so there's no
+      // reason to wait WEATHER_STORM_FADE_MS before the first real paint
+      // shows storm snow (see SNOW_STORM_SWAP's own comment).
+      dispatch({ type: "SNOW_STORM_SWAP" });
+    }
+  } catch (e) {
+    // no saved preference yet — light wind by default
+  }
+}
+
+// Whether the snow always shows at full intensity or fades along with the
+// widget's own transparency slider -- the exact same locked/unlocked idea
+// as the background photo (see BG_IMAGE_LOCKED_FILE/applyBgImageLayers
+// above), just driving a single opacity number instead of choosing
+// between two background-image layers. Not React state, same reasoning
+// as bgImageLocked: nothing about it needs a re-render, just a live CSS
+// custom property the .snow-layer rule below reads.
+const SNOW_LOCKED_FILE = "~/.plex_widget_snow_locked";
+let snowOpacityLocked = false;
+
+function currentSnowLocked() {
+  return snowOpacityLocked;
+}
+
+// When unlocked, --plex-snow-opacity is set to the literal string
+// "var(--plex-bg-opacity, 0)" -- a live reference, not a snapshotted
+// number -- so it keeps tracking the transparency slider on its own from
+// then on with no need to hook into the slider's own change handler.
+function syncSnowOpacity() {
+  document.documentElement.style.setProperty(
+    "--plex-snow-opacity",
+    snowOpacityLocked ? "1" : "var(--plex-bg-opacity, 0)"
+  );
+}
+
+function onToggleSnowLockClick() {
+  snowOpacityLocked = !snowOpacityLocked;
+  syncSnowOpacity();
+  run(`echo "${snowOpacityLocked}" > ${SNOW_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedSnowLocked() {
+  try {
+    const out = await run(`cat ${SNOW_LOCKED_FILE} 2>/dev/null`);
+    snowOpacityLocked = (out || "").trim() === "true";
+  } catch (e) {
+    snowOpacityLocked = false;
+  }
+  syncSnowOpacity();
+}
+
+// How much of the full snow (see SNOW_PIECE_COUNT_CALM/_STORM in
+// renderSnowflakes) actually renders, 0-100. React state, not the
+// imperative pattern the lock above uses, since changing this has to
+// add/remove actual flake elements -- that needs a real re-render.
+const SNOW_AMOUNT_FILE = "~/.plex_widget_snow_amount";
+
+async function loadSavedSnowAmount(dispatch) {
+  try {
+    const out = await run(`cat ${SNOW_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_SNOW_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+// --- Background rain (Weather menu) ---------------------------------------
+// Same three-part pattern as snow just above: on/off + amount are React
+// state, the lock is a plain module variable driving a live CSS custom
+// property. See SNOW_ENABLED_FILE/syncSnowOpacity's own comments for why
+// each piece is built the way it is -- rain and leaves below just repeat
+// that same shape rather than sharing code, same as this file's other
+// "one file per near-identical feature" pairs (BG_IMAGE vs
+// POPOUT_BG_IMAGE, TOGGLE_LOGO vs TOGGLE_BANDWIDTH_OVERLAY, etc.).
+const RAIN_ENABLED_FILE = "~/.plex_widget_rain_enabled";
+const RAIN_STORM_FILE = "~/.plex_widget_rain_storm";
+const RAIN_AMOUNT_FILE = "~/.plex_widget_rain_amount";
+const RAIN_LOCKED_FILE = "~/.plex_widget_rain_locked";
+let rainOpacityLocked = false;
+
+async function loadSavedRainEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${RAIN_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_RAIN" });
+  } catch (e) {
+    // no saved preference yet — off by default
+  }
+}
+
+async function loadSavedRainStorm(dispatch) {
+  try {
+    const out = await run(`cat ${RAIN_STORM_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") {
+      dispatch({ type: "TOGGLE_RAIN_STORM" });
+      // See loadSavedSnowStorm's comment on the matching swap there.
+      dispatch({ type: "RAIN_STORM_SWAP" });
+    }
+  } catch (e) {
+    // no saved preference yet — steady rain by default
+  }
+}
+
+async function loadSavedRainAmount(dispatch) {
+  try {
+    const out = await run(`cat ${RAIN_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_RAIN_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+function currentRainLocked() {
+  return rainOpacityLocked;
+}
+
+function syncRainOpacity() {
+  document.documentElement.style.setProperty(
+    "--plex-rain-opacity",
+    rainOpacityLocked ? "1" : "var(--plex-bg-opacity, 0)"
+  );
+}
+
+function onToggleRainLockClick() {
+  rainOpacityLocked = !rainOpacityLocked;
+  syncRainOpacity();
+  run(`echo "${rainOpacityLocked}" > ${RAIN_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedRainLocked() {
+  try {
+    const out = await run(`cat ${RAIN_LOCKED_FILE} 2>/dev/null`);
+    rainOpacityLocked = (out || "").trim() === "true";
+  } catch (e) {
+    rainOpacityLocked = false;
+  }
+  syncRainOpacity();
+}
+
+// --- Background falling leaves (Weather menu) -----------------------------
+// Same shape again -- see the rain block just above.
+const LEAVES_ENABLED_FILE = "~/.plex_widget_leaves_enabled";
+const LEAVES_STORM_FILE = "~/.plex_widget_leaves_storm";
+const LEAVES_AMOUNT_FILE = "~/.plex_widget_leaves_amount";
+const LEAVES_LOCKED_FILE = "~/.plex_widget_leaves_locked";
+let leavesOpacityLocked = false;
+
+async function loadSavedLeavesEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${LEAVES_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_LEAVES" });
+  } catch (e) {
+    // no saved preference yet — off by default
+  }
+}
+
+async function loadSavedLeavesStorm(dispatch) {
+  try {
+    const out = await run(`cat ${LEAVES_STORM_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") {
+      dispatch({ type: "TOGGLE_LEAVES_STORM" });
+      // See loadSavedSnowStorm's comment on the matching swap there.
+      dispatch({ type: "LEAVES_STORM_SWAP" });
+    }
+  } catch (e) {
+    // no saved preference yet — gentle drift by default
+  }
+}
+
+async function loadSavedLeavesAmount(dispatch) {
+  try {
+    const out = await run(`cat ${LEAVES_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_LEAVES_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+function currentLeavesLocked() {
+  return leavesOpacityLocked;
+}
+
+function syncLeavesOpacity() {
+  document.documentElement.style.setProperty(
+    "--plex-leaves-opacity",
+    leavesOpacityLocked ? "1" : "var(--plex-bg-opacity, 0)"
+  );
+}
+
+function onToggleLeavesLockClick() {
+  leavesOpacityLocked = !leavesOpacityLocked;
+  syncLeavesOpacity();
+  run(`echo "${leavesOpacityLocked}" > ${LEAVES_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedLeavesLocked() {
+  try {
+    const out = await run(`cat ${LEAVES_LOCKED_FILE} 2>/dev/null`);
+    leavesOpacityLocked = (out || "").trim() === "true";
+  } catch (e) {
+    leavesOpacityLocked = false;
+  }
+  syncLeavesOpacity();
+}
+
+// --- Halloween (Weather menu) -- persistence -----------------------------
+// Same shape again -- see the leaves block just above. The master
+// Halloween on/off and its lock work exactly like snow/rain/leaves'
+// own; bats/pumpkins/cats are simple independent flips with their own
+// saved file each, but no fade/lock of their own -- see TOGGLE_BATS/
+// TOGGLE_PUMPKINS/TOGGLE_CATS above for why.
+const HALLOWEEN_ENABLED_FILE = "~/.plex_widget_halloween_enabled";
+const HALLOWEEN_LOCKED_FILE = "~/.plex_widget_halloween_locked";
+const BATS_ENABLED_FILE = "~/.plex_widget_bats_enabled";
+const BATS_AMOUNT_FILE = "~/.plex_widget_bats_amount";
+const PUMPKINS_ENABLED_FILE = "~/.plex_widget_pumpkins_enabled";
+const PUMPKINS_AMOUNT_FILE = "~/.plex_widget_pumpkins_amount";
+const CATS_ENABLED_FILE = "~/.plex_widget_cats_enabled";
+const CATS_AMOUNT_FILE = "~/.plex_widget_cats_amount";
+const GHOSTS_ENABLED_FILE = "~/.plex_widget_ghosts_enabled";
+const GHOSTS_AMOUNT_FILE = "~/.plex_widget_ghosts_amount";
+let halloweenOpacityLocked = false;
+
+async function loadSavedHalloweenEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${HALLOWEEN_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_HALLOWEEN" });
+  } catch (e) {
+    // no saved preference yet — off by default
+  }
+}
+
+// Bats/pumpkins/cats default to true (see initialState) -- the OPPOSITE
+// of snow/rain/leaves' own loadSaved*Enabled above, which dispatch only
+// when the saved file says "true" (off by default). These three only
+// need to dispatch a toggle when the user has explicitly turned one
+// OFF before, i.e. when the saved file says "false".
+async function loadSavedBatsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${BATS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_BATS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedBatsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${BATS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_BATS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedPumpkinsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${PUMPKINS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_PUMPKINS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedPumpkinsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${PUMPKINS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_PUMPKINS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedCatsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${CATS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_CATS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+// Unlike bats/pumpkins' own amount (how many of a whole falling/flying
+// population show), this scales only the EXTRA cats beyond the two
+// mandatory top-tile ones -- see renderCats' own comment -- but is
+// saved/loaded the exact same way.
+async function loadSavedCatsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${CATS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_CATS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedGhostsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${GHOSTS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_GHOSTS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedGhostsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${GHOSTS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_GHOSTS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+function currentHalloweenLocked() {
+  return halloweenOpacityLocked;
+}
+
+function syncHalloweenOpacity() {
+  document.documentElement.style.setProperty(
+    "--plex-halloween-opacity",
+    halloweenOpacityLocked ? "1" : "var(--plex-bg-opacity, 0)"
+  );
+}
+
+function onToggleHalloweenLockClick() {
+  halloweenOpacityLocked = !halloweenOpacityLocked;
+  syncHalloweenOpacity();
+  run(`echo "${halloweenOpacityLocked}" > ${HALLOWEEN_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedHalloweenLocked() {
+  try {
+    const out = await run(`cat ${HALLOWEEN_LOCKED_FILE} 2>/dev/null`);
+    halloweenOpacityLocked = (out || "").trim() === "true";
+  } catch (e) {
+    halloweenOpacityLocked = false;
+  }
+  syncHalloweenOpacity();
+}
+
+// --- Christmas (Weather menu) -- persistence ------------------------------
+// Same shape again -- see the Halloween block just above. The master
+// Christmas on/off and its lock work exactly like Halloween's own;
+// Santa/mistletoe/ornaments are simple independent flips with their own
+// saved file each, but no fade/lock of their own -- see
+// TOGGLE_SANTA/TOGGLE_MISTLETOE/TOGGLE_ORNAMENTS above.
+const CHRISTMAS_ENABLED_FILE = "~/.plex_widget_christmas_enabled";
+const CHRISTMAS_LOCKED_FILE = "~/.plex_widget_christmas_locked";
+const SANTA_ENABLED_FILE = "~/.plex_widget_santa_enabled";
+const MISTLETOE_ENABLED_FILE = "~/.plex_widget_mistletoe_enabled";
+const MISTLETOE_AMOUNT_FILE = "~/.plex_widget_mistletoe_amount";
+const ORNAMENTS_ENABLED_FILE = "~/.plex_widget_ornaments_enabled";
+const ORNAMENTS_AMOUNT_FILE = "~/.plex_widget_ornaments_amount";
+const GINGERBREAD_ENABLED_FILE = "~/.plex_widget_gingerbread_enabled";
+const GINGERBREAD_AMOUNT_FILE = "~/.plex_widget_gingerbread_amount";
+const STARS_ENABLED_FILE = "~/.plex_widget_stars_enabled";
+const STARS_AMOUNT_FILE = "~/.plex_widget_stars_amount";
+let christmasOpacityLocked = false;
+
+async function loadSavedChristmasEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${CHRISTMAS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "true") dispatch({ type: "TOGGLE_CHRISTMAS" });
+  } catch (e) {
+    // no saved preference yet — off by default
+  }
+}
+
+// Santa/mistletoe/ornaments default to true (see initialState) -- same
+// "only dispatch when explicitly turned off before" reasoning as
+// loadSavedBatsEnabled above.
+async function loadSavedSantaEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${SANTA_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_SANTA" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedMistletoeEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${MISTLETOE_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_MISTLETOE" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedMistletoeAmount(dispatch) {
+  try {
+    const out = await run(`cat ${MISTLETOE_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_MISTLETOE_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedOrnamentsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${ORNAMENTS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_ORNAMENTS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedOrnamentsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${ORNAMENTS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_ORNAMENTS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedGingerbreadEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${GINGERBREAD_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_GINGERBREAD" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedGingerbreadAmount(dispatch) {
+  try {
+    const out = await run(`cat ${GINGERBREAD_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_GINGERBREAD_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+async function loadSavedStarsEnabled(dispatch) {
+  try {
+    const out = await run(`cat ${STARS_ENABLED_FILE} 2>/dev/null`);
+    if ((out || "").trim() === "false") dispatch({ type: "TOGGLE_STARS" });
+  } catch (e) {
+    // no saved preference yet — on by default
+  }
+}
+
+async function loadSavedStarsAmount(dispatch) {
+  try {
+    const out = await run(`cat ${STARS_AMOUNT_FILE} 2>/dev/null`);
+    const v = parseInt((out || "").trim(), 10);
+    if (Number.isFinite(v)) dispatch({ type: "SET_STARS_AMOUNT", value: Math.max(0, Math.min(100, v)) });
+  } catch (e) {
+    // no saved preference yet — full amount by default
+  }
+}
+
+function currentChristmasLocked() {
+  return christmasOpacityLocked;
+}
+
+function syncChristmasOpacity() {
+  document.documentElement.style.setProperty(
+    "--plex-christmas-opacity",
+    christmasOpacityLocked ? "1" : "var(--plex-bg-opacity, 0)"
+  );
+}
+
+function onToggleChristmasLockClick() {
+  christmasOpacityLocked = !christmasOpacityLocked;
+  syncChristmasOpacity();
+  run(`echo "${christmasOpacityLocked}" > ${CHRISTMAS_LOCKED_FILE}`).catch(() => {});
+}
+
+async function loadSavedChristmasLocked() {
+  try {
+    const out = await run(`cat ${CHRISTMAS_LOCKED_FILE} 2>/dev/null`);
+    christmasOpacityLocked = (out || "").trim() === "true";
+  } catch (e) {
+    christmasOpacityLocked = false;
+  }
+  syncChristmasOpacity();
+}
+
+const STREAMS_POPOUT_TILE_SIZE_FILE = "~/.plex_widget_streams_popout_tile_size";
+const STREAMS_POPOUT_TILE_SIZES = ["small", "medium", "large"];
+
+function persistStreamsPopoutTileSize(size) {
+  run(`echo "${size}" > ${STREAMS_POPOUT_TILE_SIZE_FILE}`).catch(() => {});
+}
+
+async function loadSavedStreamsPopoutTileSize(dispatch) {
+  try {
+    const out = (await run(`cat ${STREAMS_POPOUT_TILE_SIZE_FILE} 2>/dev/null`) || "").trim();
+    if (STREAMS_POPOUT_TILE_SIZES.includes(out)) {
+      dispatch({ type: "SET_STREAMS_POPOUT_TILE_SIZE", size: out });
+    }
+  } catch (e) {
+    // no saved state yet — defaults from initialState apply
+  }
+}
+
+// "auto" keeps the existing auto-fit/minmax behavior (as many columns of
+// the selected tile size as fit, growing to fill leftover width). A
+// specific number pins the column count -- the grid always lays out
+// exactly that many equal-width columns regardless of the pop-out's
+// width, so tiles still grow/shrink smoothly as you resize (each column
+// is width/N), they just never gain or lose a column on their own.
+const STREAMS_POPOUT_COLUMNS_FILE = "~/.plex_widget_streams_popout_columns";
+const STREAMS_POPOUT_COLUMNS_OPTIONS = ["auto", "1", "2", "3", "4", "5", "6"];
+
+function persistStreamsPopoutColumns(columns) {
+  run(`echo "${columns}" > ${STREAMS_POPOUT_COLUMNS_FILE}`).catch(() => {});
+}
+
+async function loadSavedStreamsPopoutColumns(dispatch) {
+  try {
+    const out = (await run(`cat ${STREAMS_POPOUT_COLUMNS_FILE} 2>/dev/null`) || "").trim();
+    if (STREAMS_POPOUT_COLUMNS_OPTIONS.includes(out)) {
+      dispatch({ type: "SET_STREAMS_POPOUT_COLUMNS", columns: out });
+    }
+  } catch (e) {
+    // no saved state yet — defaults from initialState apply
+  }
+}
+
+// Same idea as columns, for rows -- "auto" leaves the grid's height
+// alone (it just grows with content, scrolling within the pop-out as
+// normal). A specific number gives the grid an explicit height (100% of
+// the scroll area) split into that many equal rows, so you can pin an
+// exact N-columns by M-rows layout. Extra tiles beyond what N x M holds
+// still exist, they just land in auto-sized overflow rows below the
+// fixed ones and scroll into view like anything else here.
+const STREAMS_POPOUT_ROWS_FILE = "~/.plex_widget_streams_popout_rows";
+const STREAMS_POPOUT_ROWS_OPTIONS = ["auto", "1", "2", "3", "4", "5", "6"];
+
+function persistStreamsPopoutRows(rows) {
+  run(`echo "${rows}" > ${STREAMS_POPOUT_ROWS_FILE}`).catch(() => {});
+}
+
+async function loadSavedStreamsPopoutRows(dispatch) {
+  try {
+    const out = (await run(`cat ${STREAMS_POPOUT_ROWS_FILE} 2>/dev/null`) || "").trim();
+    if (STREAMS_POPOUT_ROWS_OPTIONS.includes(out)) {
+      dispatch({ type: "SET_STREAMS_POPOUT_ROWS", rows: out });
+    }
+  } catch (e) {
+    // no saved state yet — defaults from initialState apply
+  }
+}
+
+const STREAMS_POPOUT_SORT_FILE = "~/.plex_widget_streams_popout_sort";
+const STREAMS_POPOUT_SORTS = ["title", "user", "progress", "remaining", "added", "speed", "state"];
+
+function persistStreamsPopoutSort(sort, dir) {
+  run(`echo "${sort}:${dir}" > ${STREAMS_POPOUT_SORT_FILE}`).catch(() => {});
+}
+
+async function loadSavedStreamsPopoutSort(dispatch) {
+  try {
+    const out = (await run(`cat ${STREAMS_POPOUT_SORT_FILE} 2>/dev/null`) || "").trim();
+    const [sort, dir] = out.split(":");
+    if (STREAMS_POPOUT_SORTS.includes(sort) && (dir === "asc" || dir === "desc")) {
+      dispatch({ type: "SET_STREAMS_POPOUT_SORT", sort, dir });
+    }
+  } catch (e) {
+    // no saved state yet — defaults from initialState apply
+  }
+}
+
+// Cosmetic-only display name override -- never touches the real Plex
+// server, just what this widget shows. Stored base64-encoded so an
+// arbitrary title (quotes, $, backticks, etc.) can never break out of the
+// shell command that writes/reads the dotfile.
+const CUSTOM_SERVER_TITLE_FILE = "~/.plex_widget_custom_server_title";
+
+function persistCustomServerTitle(title) {
+  if (!title) {
+    run(`rm -f ${CUSTOM_SERVER_TITLE_FILE}`).catch(() => {});
+    return;
+  }
+  try {
+    const b64 = btoa(unescape(encodeURIComponent(title)));
+    run(`echo "${b64}" > ${CUSTOM_SERVER_TITLE_FILE}`).catch(() => {});
+  } catch (e) {
+    // encoding failed -- leave any previously saved title alone
+  }
+}
+
+async function loadSavedCustomServerTitle(dispatch) {
+  try {
+    const out = (await run(`cat ${CUSTOM_SERVER_TITLE_FILE} 2>/dev/null`) || "").trim();
+    if (out) {
+      const decoded = decodeURIComponent(escape(atob(out)));
+      if (decoded) dispatch({ type: "SET_CUSTOM_SERVER_TITLE", value: decoded });
+    }
+  } catch (e) {
+    // no saved state yet — defaults from initialState apply
+  }
+}
+
 function persistCollapsedToggle(key, willBeCollapsed) {
   run(`echo "${willBeCollapsed}" > ${COLLAPSE_FILE_PREFIX}${key}`).catch(() => {});
 }
@@ -3111,6 +6926,7 @@ async function loadSavedCollapsedSections(dispatch) {
     { key: "recentAdded", toggleType: "TOGGLE_RECENT" },
     { key: "activity", toggleType: "TOGGLE_ACTIVITY" },
     { key: "system", toggleType: "TOGGLE_SYSTEM" },
+    { key: "sonarr", toggleType: "TOGGLE_SONARR" },
   ];
   for (const { key, toggleType } of sections) {
     try {
@@ -3122,7 +6938,7 @@ async function loadSavedCollapsedSections(dispatch) {
   }
 }
 
-function renderSectionHeader(order, key, label, collapsed, toggleType, hiddenSections) {
+function renderSectionHeader(order, key, label, collapsed, toggleType, hiddenSections, extraControl = null) {
   const idx = order.indexOf(key);
   return (
     <div className="section-label collapsible">
@@ -3136,6 +6952,7 @@ function renderSectionHeader(order, key, label, collapsed, toggleType, hiddenSec
         <span className={`caret ${collapsed ? "collapsed" : ""}`}>▾</span> {label}
       </span>
       <span className="section-order-controls">
+        {extraControl}
         <span
           className={`order-btn ${idx <= 0 ? "disabled" : ""}`}
           onClick={() => idx > 0 && moveSectionAndDispatch(order, key, -1)}
@@ -3160,6 +6977,2102 @@ function renderSectionHeader(order, key, label, collapsed, toggleType, hiddenSec
       </span>
     </div>
   );
+}
+
+const STREAMS_POPOUT_SORT_LABELS = {
+  title: "Title",
+  user: "User",
+  progress: "Progress",
+  remaining: "Time Remaining",
+  added: "Date Added",
+  speed: "Speed",
+  state: "Playing/Paused",
+};
+
+function capitalizeWord(w) {
+  return w ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+}
+
+function getStreamsPopoutUsers(sessions) {
+  const set = new Set();
+  sessions.forEach((s) => set.add((s.User && s.User.title) || "Unknown"));
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function getStreamsPopoutTypes(sessions) {
+  const set = new Set();
+  sessions.forEach((s) => s.type && set.add(s.type));
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function filterAndSortStreams(sessions, opts) {
+  const {
+    filterUser,
+    filterState,
+    filterDecision,
+    filterType,
+    filterMultiOnly,
+    search,
+    sort,
+    sortDir,
+    sessionCountByUser,
+  } = opts;
+
+  const searchLower = (search || "").trim().toLowerCase();
+
+  let list = sessions.filter((s) => {
+    const username = (s.User && s.User.title) || "Unknown";
+    if (filterUser !== "all" && username !== filterUser) return false;
+
+    const isPaused = Boolean(s.Player && s.Player.state === "paused");
+    if (filterState === "playing" && isPaused) return false;
+    if (filterState === "paused" && !isPaused) return false;
+
+    if (filterDecision !== "all" && getStreamInfo(s).badgeClass !== filterDecision) return false;
+
+    if (filterType !== "all" && s.type !== filterType) return false;
+
+    if (filterMultiOnly && (sessionCountByUser[username] || 0) < 2) return false;
+
+    if (searchLower) {
+      const title = displayTitleForSession(s) || "";
+      const device = (s.Player && s.Player.title) || "";
+      const haystack = `${title} ${username} ${device}`.toLowerCase();
+      if (!haystack.includes(searchLower)) return false;
+    }
+
+    return true;
+  });
+
+  const dir = sortDir === "desc" ? -1 : 1;
+  list = list.slice().sort((a, b) => {
+    switch (sort) {
+      case "user": {
+        const au = (a.User && a.User.title) || "";
+        const bu = (b.User && b.User.title) || "";
+        return au.localeCompare(bu) * dir;
+      }
+      case "progress": {
+        const ap = a.duration ? a.viewOffset / a.duration : 0;
+        const bp = b.duration ? b.viewOffset / b.duration : 0;
+        return (ap - bp) * dir;
+      }
+      case "remaining": {
+        const ar = a.duration != null && a.viewOffset != null ? a.duration - a.viewOffset : Infinity;
+        const br = b.duration != null && b.viewOffset != null ? b.duration - b.viewOffset : Infinity;
+        return (ar - br) * dir;
+      }
+      case "added": {
+        const aa = a.addedAt || 0;
+        const bb = b.addedAt || 0;
+        return (aa - bb) * dir;
+      }
+      case "speed": {
+        const as = (a.Session && a.Session.bandwidth) || 0;
+        const bs = (b.Session && b.Session.bandwidth) || 0;
+        return (as - bs) * dir;
+      }
+      case "state": {
+        const aState = a.Player && a.Player.state === "paused" ? 1 : 0;
+        const bState = b.Player && b.Player.state === "paused" ? 1 : 0;
+        return (aState - bState) * dir;
+      }
+      case "title":
+      default: {
+        const at = displayTitleForSession(a) || "";
+        const bt = displayTitleForSession(b) || "";
+        return at.localeCompare(bt) * dir;
+      }
+    }
+  });
+
+  return list;
+}
+
+// Medium/large tiles show every field (unlike small/compact tiles), but
+// a forced low column count (the Cols dropdown) can push either one
+// narrower than its own grid floor would normally allow, crowding the
+// horizontal poster-left layout. Rather than guess a pop-out width, this
+// measures an actual rendered tile's current width and treats anything
+// under the threshold as "too tight". Medium falls back to the same
+// hide-and-show-on-hover treatment small tiles use (the `compact` flag);
+// large instead switches to the stacked poster-on-top card (the
+// `stacked` flag) so it keeps showing full info rather than hiding any
+// of it -- large tiles are chosen specifically to see everything.
+const MEDIUM_TILE_SQUEEZE_THRESHOLD = 360;
+const LARGE_TILE_SQUEEZE_THRESHOLD = 460;
+
+function measurePopoutMediumTileSqueezed() {
+  try {
+    const tile = document.querySelector(".streams-popout-grid-medium .media-row");
+    if (!tile) return false;
+    return tile.getBoundingClientRect().width < MEDIUM_TILE_SQUEEZE_THRESHOLD;
+  } catch (e) {
+    return false;
+  }
+}
+
+function measurePopoutLargeTileSqueezed() {
+  try {
+    const tile = document.querySelector(".streams-popout-grid-large .media-row");
+    if (!tile) return false;
+    return tile.getBoundingClientRect().width < LARGE_TILE_SQUEEZE_THRESHOLD;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Today's top-user celebration -- lots of really small pieces, scattered
+// at random-looking positions throughout the tile, falling straight down
+// (no upward burst) while swaying side to side and flickering in and out
+// like actual confetti in the air rather than a uniform shower. Values
+// are derived from each piece's own index instead of Math.random() so
+// the spread is stable across re-renders -- the tile's key stays the
+// session id (see renderStreamTile's key comment above), so the DOM node
+// and its running CSS animation persist between polls; randomizing on
+// every call would make the inline styles change under a still-running
+// animation and the pieces would visibly jump every poll.
+const CONFETTI_PIECE_COUNT = 160;
+
+function renderConfettiPieces() {
+  const pieces = [];
+  for (let idx = 0; idx < CONFETTI_PIECE_COUNT; idx++) {
+    // Several different, unrelated strides (rather than one formula
+    // reused everywhere) so pieces land, sway, and time their flicker at
+    // scattered points instead of forming a visible repeating pattern.
+    const left = (idx * 47) % 100;
+    const top = ((idx * 31) + 11) % 100;
+    const hue = (idx * 67) % 360;
+    const fall = 90 + ((idx * 29) % 140); // how far each piece rains down before looping, px
+    const sway = 2 + ((idx * 19) % 4); // just a small left/right nudge each loop, px
+    const duration = (2.4 + (idx % 7) * 0.4).toFixed(2);
+    const delay = (-(((idx * 7) % CONFETTI_PIECE_COUNT)) * 0.17).toFixed(2); // negative = already mid-flight on mount; *7 decorrelates timing from the left/top/hue ordering above
+    const size = 2 + (idx % 5); // px -- really small squares, varied size
+    pieces.push(
+      <span
+        key={idx}
+        className="confetti-piece"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          background: `hsl(${hue}, 85%, 60%)`,
+          "--confetti-fall": `${fall}px`,
+          "--confetti-sway": `${sway}px`,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      />
+    );
+  }
+  return pieces;
+}
+
+// Background weather, driven by the Weather menu (see .snow-layer/
+// .rain-layer/.leaves-layer above). One instance each for the whole
+// widget rather than per-tile, so much higher piece counts than confetti
+// are fine performance-wise. All three fall straight down while
+// drifting toward one side (the wind) with a small flutter on top --
+// same derive-from-index approach as renderConfettiPieces and for the
+// same reason (a stable, non-jumping animation across polls). `amount`
+// (0-100, from the Weather menu's slider) scales each effect's own base
+// piece count down; 100 means "all of them".
+function weatherPieceCount(baseCount, amount) {
+  const pct = Math.max(0, Math.min(100, amount)) / 100;
+  return Math.round(baseCount * pct);
+}
+
+// Real rendered height of the widget's own root, measured directly
+// rather than guessed -- weather pieces need to fall the FULL height
+// of whatever the widget currently renders at (which varies with which
+// sections are shown/collapsed, window resizing, etc.), not a fixed
+// px guess that can come up short on a taller layout and make pieces
+// look like they stop/reset partway down instead of genuinely reaching
+// the bottom. Called once per render* call (not per piece).
+function measureWidgetHeight() {
+  try {
+    const root = document.querySelector(".widget-root");
+    if (root) {
+      const h = root.getBoundingClientRect().height;
+      if (h > 0) return h;
+    }
+  } catch (e) {
+    // fall through to the guess below
+  }
+  return 500; // reasonable guess if measurement isn't available yet (e.g. very first paint)
+}
+
+// The real UI surfaces rain can visibly "land" on before reaching the
+// bottom of the widget -- Now Playing tiles (.media-row) and Recently
+// Added posters (.recent-poster) -- so a drop over a tile splashes on
+// its top edge instead of silently vanishing behind it and only ever
+// popping a splash at the widget's true floor. Queried once per
+// renderRaindrops call (not per drop), same reasoning as
+// measureWidgetHeight.
+//
+// Shared by rain (splashes/bounces) and snow (accumulation piles, see
+// renderSnowflakes) -- both need to know where the same real surfaces
+// (Now Playing tiles, Recently Added posters) currently sit, they just
+// land on them differently. Takes the CSS selector of whichever front
+// layer is asking (".rain-layer-front" or ".snow-layer-front") purely as
+// a coordinate reference -- since the "cover the entire widget" change,
+// every weather layer is a SIBLING of .widget-root (position:absolute/
+// relative against Übersicht's own outer container, see the
+// display:contents wrapper), not a descendant of it, and all of them
+// sit slightly outside .widget-root's own edges (the outer container's
+// own padding) by the exact same amount. Always the FRONT layer
+// specifically, never back -- splash/bounce/pile elements (the only
+// things that actually need this measurement) always render in front
+// (see the back/front splits in renderRaindrops and renderSnowflakes),
+// but every layer shares identical position:absolute;inset:0 geometry
+// against the same containing block, so any of them would measure the
+// same rect; front is just the one actually holding the elements this
+// feeds.
+function measureWeatherImpactSurfaces(layerSelector) {
+  try {
+    const layer = document.querySelector(layerSelector);
+    if (!layer) return [];
+    const layerRect = layer.getBoundingClientRect();
+    if (!layerRect.width || !layerRect.height) return [];
+    const surfaces = [];
+
+    // Now Playing tiles -- measured at their NATURAL resting position
+    // (as if .now-playing-scroll's scrollTop were 0), not wherever that
+    // list happens to be scrolled to right now. Scrolling the list
+    // shouldn't make splashes visibly jump to follow it -- rain stays
+    // anchored to the widget's own layout, not to live scroll state.
+    // Vertical scroll only, so this doesn't affect horizontal position.
+    //
+    // Scoped to .now-playing-scroll specifically, NOT a bare
+    // ".media-row" query -- renderStreamTile's same className also
+    // renders the streams popout's own tiles, and .streams-popout-behind
+    // only sets z-index:-1 (it stays fully mounted and laid out even
+    // once "closed" to the background, not display:none), so an
+    // unscoped query was picking up the popout's completely unrelated
+    // tile positions as if they were real surfaces in the main widget.
+    const scrollEl = document.querySelector(".now-playing-scroll");
+    const scrollTop = scrollEl ? scrollEl.scrollTop : 0;
+    const tiles = document.querySelectorAll(".now-playing-scroll .media-row");
+    for (let i = 0; i < tiles.length; i++) {
+      const r = tiles[i].getBoundingClientRect();
+      if (!r.width || !r.height) continue; // not actually laid out right now
+      surfaces.push({
+        leftPct: ((r.left - layerRect.left) / layerRect.width) * 100,
+        rightPct: ((r.right - layerRect.left) / layerRect.width) * 100,
+        topPx: r.top - layerRect.top + scrollTop,
+      });
+    }
+
+    // Recently Added posters sit inside a horizontally-scrolled, clipped
+    // row (.recent-row-viewport, overflow:hidden) -- a poster scrolled
+    // out of that row's visible window still has a real DOM rect (just
+    // off to the side), so without clipping to the viewport's own
+    // visible bounds a drop could register a hit over a poster that
+    // isn't actually showing, or over a gap where nothing's visible.
+    // Intersect each poster's rect with its own viewport's rect and keep
+    // only the part that's actually on screen; skip it entirely if
+    // there's no overlap left (fully scrolled out of view).
+    const viewports = document.querySelectorAll(".recent-row-viewport");
+    for (let v = 0; v < viewports.length; v++) {
+      const viewport = viewports[v];
+      const vRect = viewport.getBoundingClientRect();
+      if (!vRect.width || !vRect.height) continue;
+      const posters = viewport.querySelectorAll(".recent-poster");
+      for (let i = 0; i < posters.length; i++) {
+        const r = posters[i].getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const visLeft = Math.max(r.left, vRect.left);
+        const visRight = Math.min(r.right, vRect.right);
+        if (visRight <= visLeft) continue; // fully scrolled out of view
+        surfaces.push({
+          leftPct: ((visLeft - layerRect.left) / layerRect.width) * 100,
+          rightPct: ((visRight - layerRect.left) / layerRect.width) * 100,
+          topPx: r.top - layerRect.top,
+        });
+      }
+    }
+
+    // Stashed on the returned array (not a separate return value) so the
+    // one call site below can pull it out without changing this
+    // function's signature -- .rain-layer's own measured height, for use
+    // as the "floor" every pixel calc in renderRaindrops needs to agree
+    // on (see the comment on that widgetHeight assignment below).
+    surfaces.layerHeight = layerRect.height;
+    return surfaces;
+  } catch (e) {
+    return [];
+  }
+}
+
+// Where (in px down from the layer's own top) a piece at this left%
+// actually hits something solid -- the topmost surface (see
+// measureWeatherImpactSurfaces above) whose horizontal span contains it,
+// or the widget's own bottom edge if nothing's there. Used by both rain
+// (a drop) and snow (a flake) -- leftPct is just the piece's OWN
+// starting left -- close enough for this (the sideways drift by the
+// time it lands is small relative to a tile's width), same "good
+// enough, not pixel-physics" approach as the rest of this file.
+//
+// Passing an empty `surfaces` array (rather than the real
+// impactSurfaces) always falls through to the widgetHeight floor no
+// matter what's really on screen -- that's exactly what renderRaindrops/
+// renderSnowflakes do for their BACK-layer pieces (see isBackLayer),
+// specifically so a tile no longer acts like an umbrella shielding the
+// real floor beneath it: the tile itself still catches the FRONT half of
+// drops/flakes at that left%, while the BACK half passes it by (front/
+// back is already how these pieces render relative to .widget-root, see
+// backDrops/frontDrops) and lands at the true bottom instead, so both
+// the tile's top edge AND the floor underneath it show splashes/piles
+// at the same horizontal position.
+function weatherImpactYPx(surfaces, leftPct, widgetHeight) {
+  let best = widgetHeight;
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i];
+    if (leftPct >= s.leftPct && leftPct <= s.rightPct && s.topPx > 0 && s.topPx < best) {
+      best = s.topPx;
+    }
+  }
+  return best;
+}
+
+// Deterministic 0..1 pseudo-random value from an integer seed (a sine
+// hash, not Math.random()) -- the same seed always produces the same
+// value, so a piece's derived look/motion never jumps across
+// re-renders (the same reasoning as the index-derived values used
+// elsewhere in this file), but unlike a simple (idx * k) % 100 formula
+// it doesn't leave a visible repeating grid/lattice across the piece
+// population -- used by renderLeaves below.
+function pseudoRandom(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+const SNOW_PIECE_COUNT_CALM = 70;
+const SNOW_PIECE_COUNT_STORM = 150;
+
+// A real six-armed snowflake silhouette, stroke-only (see .snowflake-icon
+// path's fill:none/stroke above) -- a main spoke out from center at each
+// of the 6 compass points, plus a small forked branch partway along each
+// spoke, same basic construction as a paper-cutout snowflake. Drawn as
+// one path with many M/L subpaths rather than 18 separate <line>s.
+// 24x24 viewBox, centered on (12,12), same as LEAF_SHAPES below.
+const SNOWFLAKE_ICON_PATH =
+  "M12,12 L21,12 M12,12 L16.5,19.79 M12,12 L7.5,19.79 M12,12 L3,12 M12,12 L7.5,4.21 M12,12 L16.5,4.21 " +
+  "M18,12 L20.6,13.5 M18,12 L20.6,10.5 " +
+  "M15,17.2 L15,20.2 M15,17.2 L17.6,18.7 " +
+  "M9,17.2 L6.4,18.7 M9,17.2 L9,20.2 " +
+  "M6,12 L3.4,10.5 M6,12 L3.4,13.5 " +
+  "M9,6.8 L9,3.8 M9,6.8 L6.4,5.3 " +
+  "M15,6.8 L17.6,5.3 M15,6.8 L15,3.8";
+
+// Real gusty wind doesn't oscillate left-right-left within one snowflake's
+// own few-second fall -- it blows one way for a while, then genuinely
+// shifts. So the storm gust's DIRECTION is one shared value every flake
+// reads at render time (not a per-flake thing, and not baked into the
+// keyframe as an alternating pattern the way an earlier version of this
+// did). It's plain React state (snowGustDirection) rather than
+// time-derived -- it only changes when Storm is actually re-selected
+// (see TOGGLE_SNOW_STORM), not on its own clock, so it holds whichever
+// side the user last landed on until they toggle storm off and back on.
+
+// idx -> mounted <span class="snow-pile"> DOM node, filled in by each
+// pile's own ref callback in renderSnowflakes and read by that pile's
+// SOURCE flake's animationiteration listener (see wireSnowPileTrigger)
+// to fire the pile's one-shot grow/dwell/melt animation. A plain object,
+// not React state -- this is pure DOM wiring, none of it should ever
+// cause a re-render. Cleared at the top of every renderSnowflakes call
+// so idx entries from a piece count that's since shrunk (the amount
+// slider, or a calm/storm swap with a smaller count) don't linger
+// forever holding onto detached DOM nodes.
+let snowPileElements = {};
+
+// Mirrors the CSS @keyframes snow-pile stops (grow 0-14%, dwell to 70%,
+// melt to 100%) as a Web Animations API keyframe list -- used by
+// wireSnowPileTrigger below instead of a perpetually-looping CSS
+// animation, so a pile only actually grows/dwells/melts at the instant a
+// real flake lands, not on its own independent clock.
+const SNOW_PILE_FRAMES = [
+  { opacity: 0, transform: "scaleY(0.25) scaleX(0.6)", offset: 0 },
+  { opacity: 0, transform: "scaleY(0.25) scaleX(0.6)", offset: 0.08 },
+  { opacity: 0.85, transform: "scaleY(1) scaleX(1)", offset: 0.14 },
+  { opacity: 0.85, transform: "scaleY(1) scaleX(1)", offset: 0.70 },
+  { opacity: 0.35, transform: "scaleY(0.55) scaleX(0.85)", offset: 0.88 },
+  { opacity: 0, transform: "scaleY(0.15) scaleX(0.7)", offset: 1 },
+];
+
+// Wires a falling flake element up so that every time ITS OWN fall
+// animation completes one loop (the "animationiteration" event -- since
+// every flake's animation-iteration-count is infinite, see .snowflake/
+// .snowflake-icon above, this fires once per landing, forever) the pile
+// associated with it (same idx, looked up in snowPileElements above)
+// plays ONE fresh grow/dwell/melt cycle via the Web Animations API --
+// the same one-shot-trigger pattern triggerLightningStrike already uses
+// for the lightning bolt, just fired by a real animation event instead
+// of a random timer. This is what makes accumulation genuinely come
+// from the pieces that are actually falling, rather than an
+// independent decorative loop: a pile only ever animates in direct
+// response to its own flake completing a real fall. pileDurationMs is
+// that flake's own randomly-chosen (but per-idx stable) dwell length --
+// fixed, not tied to the flake's own (much more variable, calm-vs-storm)
+// fall duration, so "a few seconds" stays true regardless of how fast
+// the snow itself is currently falling. Guards against double-wiring
+// (el.dataset.pileWired) since React calls this ref fresh most renders
+// even though the underlying DOM node itself is stable across them.
+function wireSnowPileTrigger(idx, pileDurationMs) {
+  return (el) => {
+    if (!el || el.dataset.pileWired) return;
+    el.dataset.pileWired = "1";
+    el.addEventListener("animationiteration", () => {
+      const pile = snowPileElements[idx];
+      if (pile) pile.animate(SNOW_PILE_FRAMES, { duration: pileDurationMs, easing: "ease-in-out" });
+    });
+  };
+}
+
+function renderSnowflakes(storm, amount, gustDirection) {
+  snowPileElements = {};
+  const base = storm ? SNOW_PIECE_COUNT_STORM : SNOW_PIECE_COUNT_CALM;
+  const count = weatherPieceCount(base, amount);
+  const widgetHeight = measureWidgetHeight();
+  // Where a flake's accumulation pile actually rests -- the same Now
+  // Playing tiles/Recently Added posters/widget floor rain's splashes
+  // use (see measureWeatherImpactSurfaces above, and the pile block
+  // below). Piles are children of .snow-layer-front, so their own floor
+  // fallback needs THAT layer's real height, not .widget-root's -- same
+  // reasoning as renderRaindrops' widgetHeight-vs-.rain-layer-front fix.
+  const impactSurfaces = measureWeatherImpactSurfaces(".snow-layer-front");
+  const pileFloorHeight = impactSurfaces.layerHeight || widgetHeight;
+  // One shared wind direction for every flake in this render pass --
+  // passed in from state (see snowGustDirection's own comment), not
+  // computed here.
+  // Same back/front depth split as rain (see renderRaindrops) -- some
+  // snow passes behind the widget's own content, some in front of it,
+  // so it reads as actually falling THROUGH the scene instead of
+  // uniformly on one side of it. A stable per-flake pick (not per-frame)
+  // via pseudoRandom so an individual flake doesn't jump layers on
+  // re-render -- offset +50 keeps it out of the way of any seed leaves/
+  // rain use at the same idx, though snow doesn't share pseudoRandom
+  // calls with those anyway.
+  const backFlakes = [];
+  const frontFlakes = [];
+  for (let idx = 0; idx < count; idx++) {
+    const left = (idx * 53) % 100;
+    // Snow falls FROM the top -- anchored just above the visible edge
+    // (not scattered through the whole height), so turning snow on reads
+    // as flakes entering from off-screen rather than snow just appearing
+    // everywhere at once. Same -2% to -8% band renderLeaves uses.
+    const top = -(2 + pseudoRandom(idx * 1000 + 54) * 6);
+    const size = 2 + (idx % 5); // px -- different sizes
+    // Always clears the widget's own actual measured height (plus a
+    // margin), so a flake genuinely falls the whole way to the bottom
+    // instead of resetting partway down a taller widget than a fixed
+    // px guess would have assumed.
+    const fall = Math.round(widgetHeight * (1.1 + ((idx * 7) % 30) / 100)); // ~1.10x-1.39x widget height
+    const windBase = storm ? 90 : 18; // baseline sideways drift over one fall, px -- storm vs. "a little wind"
+    const windRange = storm ? 60 : 14;
+    const drift = windBase + ((idx * 13) % windRange);
+    const flutter = 3 + (idx % 4); // small wobble layered on top of the drift
+    // Storm-only -- how hard @keyframes snow-storm-fall's gust ease-in
+    // kicks a flake sideways, well beyond its own base drift/flutter.
+    // SIGNED by the shared gustDirection above (not baked into the
+    // keyframe as an alternating pattern) -- the whole storm blows one
+    // way for a while, then genuinely shifts, rather than each flake
+    // swaying both ways within its own short fall. 0 (and thus a no-op)
+    // for calm snow, which doesn't use that keyframe at all. See
+    // renderSnowflakes' className below.
+    const gust = storm ? gustDirection * (55 + ((idx * 19) % 60)) : 0; // px -- ~±(55-114)px in storm
+    // Duration is derived FROM the fall distance at a target speed
+    // (px/s), not picked from a fixed range -- so a flake's visual
+    // speed stays about the same regardless of how tall `fall` ended up
+    // being for this widget; only the loop length changes with the
+    // widget's actual height, not how fast it looks like it's falling.
+    const speed = storm ? 260 + ((idx * 11) % 90) : 80 + ((idx * 11) % 35); // px/s
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = ((((idx * 7) % 97) / 97) * durationNum).toFixed(2); // positive fraction of ITS OWN duration -- so each flake actually starts parked off-screen at `top` and falls in, staggered across the whole cycle, rather than already mid-flight the instant snow turns on
+    const flakeOpacity = (0.55 + ((idx % 5) * 0.09)).toFixed(2); // varied brightness, not identical flakes
+    const isBackLayer = pseudoRandom(idx * 1000 + 50) < 0.5;
+    // Mixed population -- most flakes stay the plain dot (cheap, reads
+    // fine at a glance, and is most of what real falling snow looks
+    // like at this scale), roughly 2 in 5 render as an actual six-armed
+    // snowflake silhouette instead (SNOWFLAKE_ICON_PATH). Both share
+    // every other property (fall/drift/flutter/gust/opacity/timing) --
+    // only the shape and its own size range differ, so an icon flake
+    // gusts and settles exactly like its dot neighbors.
+    const isIcon = pseudoRandom(idx * 1000 + 51) < 0.4;
+    const target = isBackLayer ? backFlakes : frontFlakes;
+    // Accumulation -- most flakes (not literally all, real snow doesn't
+    // pile up in exactly the same spot every single time) leave a small
+    // mound where they land: a Now Playing tile's or Recently Added
+    // poster's own top edge, or the widget's real floor if nothing's
+    // under this flake -- same surfaces rain's splashes use (see
+    // measureWeatherImpactSurfaces/weatherImpactYPx above). Computed here
+    // (before the flake element itself) because the flake needs a `ref`
+    // wired to ITS OWN pile -- see wireSnowPileTrigger above: a pile only
+    // ever grows/dwells/melts in direct response to this specific flake
+    // completing a real fall-and-land loop, not on an independent clock.
+    const showsPile = pseudoRandom(idx * 1000 + 52) < 0.6;
+    // ~4.5-6s -- independent of this flake's own (much more variable,
+    // calm-vs-storm) fall duration, so "a few seconds" dwell stays true
+    // regardless of how fast the snow itself is currently falling. Fixed
+    // per idx (pseudoRandom, not Math.random()) so it doesn't change
+    // between the flake's landings.
+    const pileDurationMs = showsPile ? Math.round((4.5 + pseudoRandom(idx * 1000 + 53) * 1.5) * 1000) : 0;
+    const sharedStyle = {
+      left: `${left}%`,
+      top: `${top}%`,
+      "--weather-fall": `${fall}px`,
+      "--weather-drift": `${drift}px`,
+      "--weather-flutter": `${flutter}px`,
+      "--weather-gust": `${gust}px`,
+      "--weather-piece-opacity": flakeOpacity,
+      animationDuration: `${duration}s`,
+      animationDelay: `${delay}s`,
+    };
+    const pileRef = showsPile ? wireSnowPileTrigger(idx, pileDurationMs) : undefined;
+    if (isIcon) {
+      const iconSize = 7 + (idx % 5); // px -- bigger than the dots, needs room for the arms to actually read
+      target.push(
+        <svg
+          key={idx}
+          ref={pileRef}
+          className={storm ? "snowflake-icon snowflake-gust" : "snowflake-icon"}
+          viewBox="0 0 24 24"
+          style={{ ...sharedStyle, width: `${iconSize}px`, height: `${iconSize}px` }}
+        >
+          <path d={SNOWFLAKE_ICON_PATH} />
+        </svg>
+      );
+    } else {
+      target.push(
+        <span
+          key={idx}
+          ref={pileRef}
+          className={storm ? "snowflake snowflake-gust" : "snowflake"}
+          style={{ ...sharedStyle, width: `${size}px`, height: `${size}px` }}
+        />
+      );
+    }
+    if (showsPile) {
+      // Back-layer flakes (isBackLayer, see above) skip tile/poster
+      // surfaces entirely and always pile at the true floor -- see
+      // weatherImpactYPx's own comment on why an empty surfaces array
+      // does that. This is the fix for tiles acting like an umbrella:
+      // front-layer flakes still pile on a tile's top edge same as
+      // before, but back-layer flakes now pile on the real bottom of the
+      // widget even directly beneath one, so both show accumulation.
+      //
+      // No animationDuration/Delay here anymore -- rest state is just
+      // the plain opacity:0 from .snow-pile's own CSS (see `className`);
+      // wireSnowPileTrigger's animationiteration listener on the flake
+      // above is what actually plays this element's grow/dwell/melt
+      // cycle, via ref registering it into snowPileElements by idx.
+      const pileImpactYPx = weatherImpactYPx(isBackLayer ? [] : impactSurfaces, left, pileFloorHeight);
+      const pileWidth = 8 + (idx % 6); // px -- 8-13
+      const pileHeight = Math.round(pileWidth * 0.45);
+      frontFlakes.push(
+        <span
+          key={`p-${idx}`}
+          ref={(el) => {
+            if (el) snowPileElements[idx] = el;
+          }}
+          className="snow-pile"
+          style={{
+            left: `${left}%`,
+            top: `${Math.round(pileImpactYPx - pileHeight)}px`,
+            width: `${pileWidth}px`,
+            height: `${pileHeight}px`,
+            marginLeft: `${-pileWidth / 2}px`,
+          }}
+        />
+      );
+    }
+  }
+  return { back: backFlakes, front: frontFlakes };
+}
+
+// Thin fast streaks rather than dots -- real rain falls much quicker
+// than snow and barely drifts, so duration is short and drift/flutter
+// stay small (just enough for "a little wind"). Storm mode (same idea
+// as snow's) means more drops, a harder windblown slant, and faster
+// fall -- see RAIN_PIECE_COUNT_STORM.
+const RAIN_PIECE_COUNT_BASE = 90;
+const RAIN_PIECE_COUNT_STORM = 190;
+
+// How far into its own fall cycle a raindrop's splash pop lands (see
+// @keyframes rain-splash) -- kept as one constant so the JS delay math
+// below and the CSS keyframe offset can never drift out of sync with
+// each other. 0.92 to match rain-splash/rain-bounce's own peak (92%) --
+// both keyframes widened their visible window (was 95%) so the splash
+// actually lasts long enough to be seen instead of a single-frame blink.
+const RAIN_SPLASH_POP_OFFSET = 0.92;
+
+function renderRaindrops(storm, amount) {
+  const base = storm ? RAIN_PIECE_COUNT_STORM : RAIN_PIECE_COUNT_BASE;
+  const count = weatherPieceCount(base, amount);
+  // Now Playing tiles and Recently Added posters currently on screen --
+  // a drop that falls over one of these splashes on ITS top edge
+  // instead of continuing on (invisibly, behind the tile) all the way
+  // to the widget's own floor. See measureWeatherImpactSurfaces/
+  // weatherImpactYPx above.
+  const impactSurfaces = measureWeatherImpactSurfaces(".rain-layer-front");
+  // Raindrops and splashes are both children of .rain-layer, so every
+  // pixel calc below (fall distance, a drop's own start position, and
+  // the floor weatherImpactYPx falls back to) needs to agree with THAT
+  // box's own height -- not .widget-root's. The two aren't the same
+  // (.rain-layer sits slightly outside .widget-root's own edges, see
+  // the comment on measureWeatherImpactSurfaces above), so sourcing this
+  // from widget-root made the floor land short of the real bottom edge:
+  // a splash would pop and float above where the widget actually ends
+  // instead of sitting flush with it. Falls back to measureWidgetHeight()
+  // only on the rare render where .rain-layer isn't measurable yet.
+  const widgetHeight = impactSurfaces.layerHeight || measureWidgetHeight();
+  // Split into two populations instead of one flat list -- real rain
+  // reads as having actual depth: some of it passes behind whatever
+  // you're looking at, some of it passes in front. backDrops render in
+  // .rain-layer-back (painted BEHIND .widget-root, same spot the old
+  // single rain-layer used to sit before tiles/posters could be "hit"),
+  // frontDrops render in .rain-layer-front (painted AFTER .widget-root,
+  // on top of everything -- see the JSX below .widget-root's own closing
+  // tag). Which populate a given drop is a stable per-drop coin flip
+  // (r(13)), not per-frame, so an individual drop doesn't flicker
+  // between layers on re-render. Splash/bounce always go to frontDrops
+  // regardless of which layer their parent streak is in -- a splash
+  // is the moment of contact with a real surface, and that always needs
+  // to be visible on TOP of whatever it hit, even for a drop whose own
+  // falling streak happens to be a "behind" one.
+  const backDrops = [];
+  const frontDrops = [];
+  for (let idx = 0; idx < count; idx++) {
+    // pseudoRandom(idx*1000+n) instead of the old (idx*k)%100 arithmetic
+    // -- fixed-stride formulas like that leave a visible diagonal
+    // lattice/pattern across the whole rain field once a lot of drops
+    // are on screen (the same issue already fixed for leaves), even
+    // though each individual drop's own position is still fully stable
+    // across re-renders (same seed in, same value out -- no jump).
+    // Widely separated seeds per property so one drop's position/speed/
+    // etc. don't end up correlated with each other either. Applies to
+    // both calm and storm rain -- same formula either way, just fed
+    // different ranges below.
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const left = Math.round(r(1) * 100);
+    // Rain falls FROM the top -- anchored just above the visible edge
+    // (not scattered through the whole height), so turning rain on reads
+    // as drops entering from off-screen rather than rain just appearing
+    // everywhere at once. Same -2% to -8% band renderLeaves uses; trivial
+    // next to the 1.30x-1.65x overshoot below, so it doesn't need its own
+    // adjustment to the fall-distance math.
+    const top = -(2 + r(2) * 6);
+    const height = storm ? 12 + Math.round(r(3) * 15) : 8 + Math.round(r(3) * 10); // px -- longer streaks in a storm
+    // Always clears the widget's own actual measured height (plus a
+    // margin) -- same reasoning as renderSnowflakes above. Rain
+    // specifically (unlike snow/leaves) fades OUT over the last 15% of
+    // its own cycle (see @keyframes rain-fall's 85%->100% opacity drop),
+    // and that fade window is a fixed PERCENTAGE of `fall`, not of the
+    // widget's real height -- so a drop's overshoot ratio decides how
+    // much of the widget it's already fully faded (or fully off-screen)
+    // for. At the old 1.10x-1.40x range, a drop starting near the TOP
+    // reaches the widget's true bottom at anywhere from 71%-91% of its
+    // OWN cycle (widgetHeight / fall) -- which for the smaller overshoot
+    // values lands PAST the 85% fade-start mark, so that drop was
+    // already dimming or fully transparent by the time it got there. In
+    // practice that made a real chunk of drops (the ones with the least
+    // generous random overshoot) visibly thin out right at the bottom
+    // instead of actually reaching it at full opacity -- exactly what
+    // read as "not much water at the bottom". Raised the floor to 1.30x
+    // (worst case widgetHeight/fall = 1/1.30 = 77%) so every drop, no
+    // matter where it starts or which overshoot it randomly got, has
+    // fully crossed the real bottom edge at full opacity before its own
+    // fade-out even begins. Doesn't change fall SPEED (px/s, set below)
+    // at all -- only stretches the invisible tail end of each loop.
+    const fall = Math.round(widgetHeight * (1.3 + r(4) * 0.35)); // ~1.30x-1.65x widget height
+    // Slight windblown slant normally, a hard sideways lash in a storm.
+    const drift = storm ? 30 + Math.round(r(5) * 40) : 6 + Math.round(r(5) * 10);
+    // Duration derived from the fall distance at a target speed (px/s)
+    // instead of a fixed range -- same reasoning as renderSnowflakes.
+    // Slowed down a notch from the original 900-1199/1600-2099 px/s --
+    // that read as almost too fast, calm rain included.
+    const speed = storm ? 1350 + Math.round(r(6) * 420) : 760 + Math.round(r(6) * 250); // px/s -- still much faster than snow, just not frantic
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(7) * durationNum).toFixed(2); // positive fraction of ITS OWN duration -- starts parked off-screen at `top` and falls in, staggered, instead of already mid-flight the instant rain turns on
+    const dropOpacity = (0.25 + r(8) * 0.36).toFixed(2);
+    // Stable per-drop layer assignment -- see the comment on backDrops/
+    // frontDrops above. Plain 50/50; there's no reason for real rain to
+    // favor one depth over the other.
+    const isBackLayer = r(13) < 0.5;
+    const dropTarget = isBackLayer ? backDrops : frontDrops;
+    dropTarget.push(
+      <span
+        key={`d-${idx}`}
+        className="raindrop"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: "2.5px",
+          height: `${height}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": "0px",
+          "--weather-piece-opacity": dropOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      />
+    );
+    // A small splash ring right where this drop actually hits something
+    // -- the top edge of whatever Now Playing tile or Recently Added
+    // poster is under it (see weatherImpactYPx), or the widget's own floor
+    // if nothing's there -- synced to THIS drop's own cycle (same
+    // duration so the two loops stay locked together), with its own
+    // delay solved so its fixed 95%-of-cycle pop (see @keyframes
+    // rain-splash/RAIN_SPLASH_POP_OFFSET) lands at the exact moment this
+    // drop's own top+fall crosses that surface, not just "near the end"
+    // of an arbitrary shared cycle. impactFraction is where in [0,1) of
+    // the drop's OWN travel that happens: (remaining px to the surface
+    // from its start) / (total px it travels this lap).
+    //
+    // Not every drop gets an impact effect -- a real downpour has way
+    // more drops than visible splashes, and every single one hitting was
+    // too busy/uniform. r(9) is just a stable per-drop coin flip, same
+    // pseudoRandom approach as the rest of this function now. Of the
+    // drops that DO splash, a smaller slice also gets a little droplet
+    // that bounces up off the surface (r(10)) -- real rain does this
+    // occasionally, not on every hit.
+    //
+    // Storm has roughly double the drops of calm rain (RAIN_PIECE_COUNT_
+    // STORM vs _BASE), so the same 55%/25% rates would put more than
+    // twice as many splashes on screen -- toned way down for storm
+    // specifically (fewer, smaller, dimmer, rarer bounce) so a storm
+    // doesn't read as the bottom edge going off like popcorn.
+    const showsImpact = storm ? r(9) < 0.22 : r(9) < 0.55;
+    const showsBounce = showsImpact && (storm ? r(10) < 0.1 : r(10) < 0.25);
+    if (showsImpact) {
+      const startPx = (top / 100) * widgetHeight;
+      // Back-layer drops (isBackLayer, see above) skip tile/poster
+      // surfaces entirely and always splash at the true floor -- see
+      // weatherImpactYPx's own comment on why an empty surfaces array
+      // does that. Fixes tiles acting like an umbrella: front-layer
+      // drops still splash on a tile's top edge same as before, but
+      // back-layer drops now reach the real bottom of the widget even
+      // directly beneath one, so both show impact.
+      const impactYPx = weatherImpactYPx(isBackLayer ? [] : impactSurfaces, left, widgetHeight);
+      const impactFraction = Math.max(0, Math.min(0.98, (impactYPx - startPx) / fall));
+      const splashDelay = (parseFloat(delay) + (impactFraction - RAIN_SPLASH_POP_OFFSET) * durationNum).toFixed(2);
+      // A bit bigger than before across the board -- the widened
+      // rain-splash keyframe above (visible from 78% instead of 93%)
+      // does most of the work making splashes actually noticeable, but
+      // a slightly larger ring on top of that leaves no doubt one's
+      // there. Storm still stays the smaller/dimmer of the two.
+      const splashWidth = storm ? 8 + Math.round(r(11) * 3) : 10 + Math.round(r(11) * 4); // px
+      const splashHeight = Math.round(splashWidth * 0.45);
+      const splashPeak = storm ? 0.6 : 0.95; // dimmer pop in a storm
+      // Positioned with `top` (not the old fixed bottom:0) so the same
+      // math works whether this drop hits a tile partway down or the
+      // widget's own floor -- impactYPx already IS that surface's own Y.
+      // Always frontDrops, not dropTarget -- see the comment above
+      // backDrops/frontDrops: a splash is the moment of contact and has
+      // to be visible on top of whatever surface it's landing on, even
+      // when the drop that made it is one of the "behind" ones.
+      frontDrops.push(
+        <span
+          key={`s-${idx}`}
+          className="rain-splash"
+          style={{
+            left: `${left}%`,
+            top: `${Math.round(impactYPx - splashHeight / 2)}px`,
+            width: `${splashWidth}px`,
+            height: `${splashHeight}px`,
+            marginLeft: `${-splashWidth / 2}px`,
+            "--rain-splash-peak": splashPeak,
+            animationDuration: `${duration}s`,
+            animationDelay: `${splashDelay}s`,
+          }}
+        />
+      );
+      if (showsBounce) {
+        const bounceSize = storm ? 1 + Math.round(r(12)) : 2 + Math.round(r(12) * 2); // px -- a tiny droplet, not another streak
+        frontDrops.push(
+          <span
+            key={`b-${idx}`}
+            className="rain-bounce"
+            style={{
+              left: `${left}%`,
+              top: `${Math.round(impactYPx - bounceSize / 2)}px`,
+              width: `${bounceSize}px`,
+              height: `${bounceSize}px`,
+              marginLeft: `${-bounceSize / 2}px`,
+              animationDuration: `${duration}s`,
+              animationDelay: `${splashDelay}s`,
+            }}
+          />
+        );
+      }
+    }
+  }
+  return { back: backDrops, front: frontDrops };
+}
+
+// Bigger, slower, and tumbling (--weather-spin) -- leaves are lighter
+// than raindrops but heavier/more wind-caught than snow, so they drift
+// and flutter more and take longer to fall. Dark/light brown palette,
+// and an actual leaf silhouette (SVG path, see LEAF_SHAPES below)
+// rather than a plain shape -- a color blob alone read as a dot. Storm
+// mode (same idea as snow's) means more leaves and a harder, wider
+// windstorm drift/spin -- see LEAVES_PIECE_COUNT_STORM.
+const LEAVES_PIECE_COUNT_BASE = 25;
+const LEAVES_PIECE_COUNT_STORM = 55;
+const LEAF_COLORS = ["#3e2712", "#5c3a21", "#7a4b26", "#8b5a2b", "#a9713c", "#c08a4e", "#6b4423", "#b98b56"];
+
+// Two different leaf silhouettes mixed together (each leaf picks one at
+// random, see LEAF_SHAPES[shapeIdx] in renderLeaves below) -- real
+// falling leaves aren't all identical, and mixing the earlier
+// asymmetric-teardrop design back in alongside the current maple-leaf
+// one reads better than either shape alone. Each carries its own vein
+// path since the two silhouettes aren't the same size/proportions.
+const LEAF_SHAPES = [
+  {
+    // Asymmetric teardrop -- pointed stem tip at the top, a single
+    // rounded lobe at the bottom (an arc, not a mirrored double point).
+    body: "M12 3 C12 3 19 10 19 14 A7 7 0 1 1 5 14 C5 10 12 3 12 3 Z",
+    vein: "M12 5 L12 19",
+  },
+  {
+    // Stylized maple leaf -- three pointed lobes per side (straight
+    // jagged edges) plus a stem.
+    body: "M12,2 L13,5 L17,3 L15,7.5 L21,9 L16.5,11 L19,15 L14,14.5 L14.5,18 L12,17 L9.5,18 L10,14.5 L5,15 L7.5,11 L3,9 L9,7.5 L7,3 L11,5 Z",
+    vein: "M12 4 L12 17 M12 17 L12 21",
+  },
+];
+
+function renderLeaves(storm, amount) {
+  const base = storm ? LEAVES_PIECE_COUNT_STORM : LEAVES_PIECE_COUNT_BASE;
+  const count = weatherPieceCount(base, amount);
+  const widgetHeight = measureWidgetHeight();
+  // Same back/front depth split as rain/snow (see renderRaindrops) --
+  // some leaves pass behind the widget's own content, some in front.
+  const backLeaves = [];
+  const frontLeaves = [];
+  for (let idx = 0; idx < count; idx++) {
+    // pseudoRandom(idx * 1000 + n) instead of the (idx * k) % 100 style
+    // formulas used elsewhere -- widely separated seeds per property so
+    // one leaf's left/size/fall/etc. don't end up correlated with each
+    // other, and the sine-hash spread doesn't leave a visible repeating
+    // grid across the leaves the way a shared arithmetic stride can.
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const left = Math.round(r(1) * 100); // 0-100%
+    // Leaves fall FROM the top -- anchored right at the tile's own top
+    // edge (not scattered through the whole height), so the population
+    // actually reads as falling in rather than spawning mid-tile.
+    const top = -(2 + r(2) * 6); // -2% to -8%, just above the visible edge
+    const size = 8 + Math.round(r(3) * 4); // px -- bigger than snow/rain, needs room for the lobed outline/vein to actually read
+    // Always clears the widget's own actual measured height (plus a
+    // margin), so a leaf genuinely falls the whole way from the top to
+    // the bottom instead of resetting partway down -- same reasoning as
+    // renderSnowflakes/renderRaindrops above.
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3)); // ~1.10x-1.40x widget height
+    // Leaves get caught by the wind a lot more than snow even normally;
+    // a storm throws them around much harder and wider still. Both calm
+    // and storm always drift the same way -- a storm blows hard to the
+    // right specifically (a real gust direction), not an alternating
+    // side-to-side sway.
+    const drift = storm ? 90 + Math.round(r(5) * 90) : 30 + Math.round(r(5) * 50);
+    const flutter = storm ? 14 + Math.round(r(6) * 18) : 8 + Math.round(r(6) * 12);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (storm ? 540 + Math.round(r(7) * 480) : 300 + Math.round(r(7) * 360)); // deg over one fall, alternating direction
+    // Duration is derived FROM the fall distance at a target speed
+    // (px/s), not a fixed range -- so a leaf's visual speed stays about
+    // the same regardless of how tall `fall` ended up being for this
+    // widget. Slower than snow/rain normally, storm speeds it back up.
+    const speed = storm ? 260 + Math.round(r(8) * 90) : 90 + Math.round(r(8) * 45); // px/s
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2); // positive fraction of ITS OWN duration -- actually starts parked off-screen at `top` and falls in (the negative sign this used before undercut the -2%/-8% top offset above by pre-advancing straight into mid-flight), staggered rather than synced
+    // Larger pieces don't fade -- solidly opaque the whole way down
+    // (see @keyframes weather-fall, which no longer fades any piece in
+    // or out), just with a bit of per-leaf brightness variance.
+    const leafOpacity = (0.8 + r(10) * 0.2).toFixed(2);
+    const shape = LEAF_SHAPES[Math.floor(r(11) * LEAF_SHAPES.length)];
+    const isBackLayer = r(12) < 0.5;
+    (isBackLayer ? backLeaves : frontLeaves).push(
+      <svg
+        key={idx}
+        className="leaf"
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": leafOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        {/* This leaf's randomly-picked silhouette -- see LEAF_SHAPES
+            above (a mix of the earlier teardrop design and the current
+            maple-leaf one, chosen per piece so falling leaves aren't all
+            identical). Bold dark outline on the body plus a center vein,
+            same cartoon-weather-piece look either way. */}
+        <path
+          d={shape.body}
+          fill={LEAF_COLORS[idx % LEAF_COLORS.length]}
+          stroke="rgba(0,0,0,0.45)"
+          strokeWidth="1.1"
+          strokeLinejoin="round"
+        />
+        <path d={shape.vein} stroke="rgba(0,0,0,0.35)" strokeWidth="1" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return { back: backLeaves, front: frontLeaves };
+}
+
+// --- Halloween (Weather menu) ------------------------------------------
+// Three independently-optional pieces once the master Halloween toggle
+// itself is on (see TOGGLE_HALLOWEEN/TOGGLE_BATS/TOGGLE_PUMPKINS/
+// TOGGLE_CATS below) -- bats flying around, pumpkins/jack-o-lanterns
+// falling like leaves, and black cats patrolling a real surface. Each
+// piece's own silhouette is built from a handful of separate simple SVG
+// shapes rather than one complex path -- a single dense path for
+// something this small reliably reads as a blob, not the animal/object
+// it's supposed to be (this took the cat below three tries to get
+// right, verified by rendering each attempt to a PNG and eyeballing it
+// at realistic small in-widget size before settling on this shape).
+
+// A bat is five flat shapes: two wings (each its own path so they can
+// flap independently, see .bat-wing/-left/-right above), a round head/
+// body, and two small pointed ears. All one solid near-black fill -- no
+// outline needed at this size, unlike leaves/pumpkins which need one to
+// read against busy backgrounds. Drawn in a 48x24 box (2:1, wide and
+// short like a bat mid-flap) so a bat's own size/height below can just
+// scale that box uniformly.
+const BAT_WING_LEFT = "M20,11 C14,3 6,3 0,9 C6,7 11,9 9,14 C13,11 15,15 12,18 C17,15 19,13 21,13 Z";
+const BAT_WING_RIGHT = "M28,11 C34,3 42,3 48,9 C42,7 37,9 39,14 C35,11 33,15 36,18 C31,15 29,13 27,13 Z";
+const BAT_BODY = "M20,12 C20,8 22,6 24,6 C26,6 28,8 28,12 C28,15.5 26,17.5 24,17.5 C22,17.5 20,15.5 20,12 Z";
+const BAT_EAR_LEFT = "M21,7 L19.5,2.5 L23,6 Z";
+const BAT_EAR_RIGHT = "M27,7 L28.5,2.5 L25,6 Z";
+
+// Ambient, not a population meant to fill the widget the way snow/rain/
+// leaves do, but the slider still needed more headroom at 100% than
+// the original base allowed -- raised per request. Different size bats
+// per the request -- this is how many EXIST, not how big any one of
+// them is (see the per-bat `size` below for that).
+const BATS_PIECE_COUNT_BASE = 24;
+
+function renderBats(amount) {
+  const count = weatherPieceCount(BATS_PIECE_COUNT_BASE, amount);
+  const backBats = [];
+  const frontBats = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    // Flies at a fixed height for its own whole loop (not re-picked
+    // mid-flight) -- spread across nearly the whole widget height, not
+    // just the top band, so bats genuinely read as flying all over
+    // rather than only skimming along the ceiling.
+    const top = 3 + r(1) * 89; // 3%-92%
+    const size = 20 + Math.round(r(2) * 26); // 20-46px wide -- the "different size bats" the request asked for
+    const height = Math.round(size / 2); // 48x24 viewBox is 2:1
+    // Small and fast -- a bat flits, it doesn't drift like a falling
+    // piece. A flat random range (not derived from a real measured
+    // distance like the falling effects below) since the flight
+    // distance here is always ~the same 100%-ish of the layer's width.
+    const durationNum = 6.5 + r(3) * 6;
+    const duration = durationNum.toFixed(2);
+    // Negative delay (already mid-flight the instant Halloween turns
+    // on) -- unlike snow/rain/leaves, a bat is a continuous ambient
+    // loop with no real "spawn point" to enter from off-screen, so
+    // there's nothing to preserve by staggering it in; same reasoning
+    // as confetti's own negative delay elsewhere in this file.
+    const delay = (-(r(4) * durationNum)).toFixed(2);
+    const bob = 4 + Math.round(r(5) * 6); // px of vertical bob over the flight
+    const wingDelay = (r(6) * 0.4).toFixed(2); // desyncs this bat's own flap from every other bat's
+    const wingDuration = (0.11 + r(7) * 0.07).toFixed(2); // fast flutter (a little per-bat variance), not a slow lazy flap
+    const reverse = r(8) < 0.5; // roughly half fly the opposite way (right to left)
+    const isBackLayer = r(9) < 0.4; // most stay in front (more visible), a few pass behind for a little depth
+    const bat = (
+      <svg
+        key={idx}
+        className="bat"
+        viewBox="0 0 48 24"
+        style={{
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${height}px`,
+          "--bat-bob": `${bob}px`,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+          animationDirection: reverse ? "reverse" : "normal",
+        }}
+      >
+        {/* Each wing is its own path (see .bat-wing above) so it can
+            flap on its own hinge, independent of the other wing and of
+            this whole bat's flight path. */}
+        <path className="bat-wing bat-wing-left" d={BAT_WING_LEFT} fill="#1a1a1a" style={{ animationDuration: `${wingDuration}s`, animationDelay: `${wingDelay}s` }} />
+        <path className="bat-wing bat-wing-right" d={BAT_WING_RIGHT} fill="#1a1a1a" style={{ animationDuration: `${wingDuration}s`, animationDelay: `${wingDelay}s` }} />
+        <path d={BAT_BODY} fill="#1a1a1a" />
+        <path d={BAT_EAR_LEFT} fill="#1a1a1a" />
+        <path d={BAT_EAR_RIGHT} fill="#1a1a1a" />
+      </svg>
+    );
+    (isBackLayer ? backBats : frontBats).push(bat);
+  }
+  return { back: backBats, front: frontBats };
+}
+
+// A ghost is a single rounded, fully-organic blob (per request: "like
+// these, i would like these exactly", matching a reference sheet of
+// cute flat-cartoon ghosts) -- NOT the classic dome-on-straight-sides
+// silhouette with a row of uniform semicircle scallops along the
+// bottom (that reads as a Pac-Man ghost, which the request specifically
+// ruled out). One <path>, no outline, plain white fill, a softly
+// asymmetric wavy hem worked out by eye against the reference image and
+// verified by rendering to a PNG at realistic small in-widget size
+// before committing, same as the rest of this file's art. Two simple
+// oval eyes always; a small "boo" mouth on some of them (see
+// GHOST_MOUTH_CHANCE below) for the same bit of per-piece character
+// variety the reference sheet has (some ghosts plain, some
+// open-mouthed).
+const GHOST_BODY =
+  "M16,3 C23.5,3 28.5,8.5 28,15 C27.7,19 29,23 26,26.5 C23.8,29 22,25 19.5,28 " +
+  "C17.3,30.5 15,26.5 13,29 C10.3,26.5 9,30 6.3,27 C3.8,24.3 5,20 4,15.5 C3.3,8.5 8.5,3 16,3 Z";
+const GHOST_EYE_LEFT = { cx: 11.2, cy: 15.5 };
+const GHOST_EYE_RIGHT = { cx: 20, cy: 15.2 };
+const GHOST_MOUTH = { cx: 15.5, cy: 20, rx: 1.3, ry: 1.7 };
+const GHOST_MOUTH_CHANCE = 0.35;
+
+// Ambient like bats, not a population meant to fill the widget -- same
+// reasoning as BATS_PIECE_COUNT_BASE above, just a little lower since
+// a ghost's own rounded blob silhouette reads as "more" per piece than
+// a bat's slim wingspan does at the same count.
+const GHOSTS_PIECE_COUNT_BASE = 16;
+
+function renderGhosts(amount) {
+  const count = weatherPieceCount(GHOSTS_PIECE_COUNT_BASE, amount);
+  const backGhosts = [];
+  const frontGhosts = [];
+  for (let idx = 0; idx < count; idx++) {
+    // +6000 keeps this population's pseudoRandom stream distinct from
+    // bats' own (which seeds off the same idx*1000+n shape) so the two
+    // populations never end up correlated piece-for-piece.
+    const r = (n) => pseudoRandom(idx * 1000 + n + 6000);
+    const size = 18 + Math.round(r(1) * 24); // 18-42px -- the "different sizes" the request asked for
+    // Four waypoints (per request: "move all over the widget not just
+    // left and right") -- left/top both random across nearly the whole
+    // widget. --ghost-x0/-y0 double as BOTH the 0% and 100% keyframe
+    // value (see @keyframes ghost-float) so the loop closes on itself
+    // with no jump when it repeats.
+    const x0 = (2 + r(2) * 86).toFixed(1);
+    const y0 = (3 + r(3) * 89).toFixed(1);
+    const x1 = (2 + r(4) * 86).toFixed(1);
+    const y1 = (3 + r(5) * 89).toFixed(1);
+    const x2 = (2 + r(6) * 86).toFixed(1);
+    const y2 = (3 + r(7) * 89).toFixed(1);
+    const x3 = (2 + r(8) * 86).toFixed(1);
+    const y3 = (3 + r(9) * 89).toFixed(1);
+    // A slow, lazy meander across all four waypoints -- much longer
+    // than a bat's quick flit across the width once, since this path
+    // now covers the whole widget in both directions, not a single
+    // straight pass.
+    const floatDurationNum = 20 + r(10) * 18;
+    const floatDuration = floatDurationNum.toFixed(2);
+    // Negative delay -- already mid-drift the instant Halloween turns
+    // on, same reasoning as renderBats' own delay above.
+    const floatDelay = (-(r(11) * floatDurationNum)).toFixed(2);
+    // The slow fade (per request: "slow fade intermittently") runs as
+    // its own SEPARATE animation with its own unrelated duration/delay,
+    // so a ghost's fade never lines up with its own position in the
+    // wander -- reads as two independent things happening to it, not
+    // one synced effect. A long cycle, meant to read as an unhurried,
+    // occasional fade, not a blink.
+    const flickerDurationNum = 7 + r(12) * 6;
+    const flickerDuration = flickerDurationNum.toFixed(2);
+    const flickerDelay = (-(r(13) * flickerDurationNum)).toFixed(2);
+    const reverse = r(14) < 0.5; // roughly half wander the waypoints in the opposite order
+    const isBackLayer = r(15) < 0.4; // same front-heavy depth split as bats
+    const hasMouth = r(16) < GHOST_MOUTH_CHANCE;
+    const restOpacity = (0.82 + r(17) * 0.14).toFixed(2); // the "resting" (non-flickering) translucency -- ghostly, not solid
+    const ghost = (
+      <svg
+        key={idx}
+        className="ghost"
+        viewBox="0 0 32 32"
+        style={{
+          width: `${size}px`,
+          height: `${size}px`,
+          "--ghost-x0": `${x0}%`,
+          "--ghost-y0": `${y0}%`,
+          "--ghost-x1": `${x1}%`,
+          "--ghost-y1": `${y1}%`,
+          "--ghost-x2": `${x2}%`,
+          "--ghost-y2": `${y2}%`,
+          "--ghost-x3": `${x3}%`,
+          "--ghost-y3": `${y3}%`,
+          "--ghost-opacity": restOpacity,
+          animationDuration: `${floatDuration}s, ${flickerDuration}s`,
+          animationDelay: `${floatDelay}s, ${flickerDelay}s`,
+          animationDirection: reverse ? "reverse, normal" : "normal, normal",
+        }}
+      >
+        <path d={GHOST_BODY} fill="#ffffff" />
+        <ellipse cx={GHOST_EYE_LEFT.cx} cy={GHOST_EYE_LEFT.cy} rx="1.7" ry="2.3" fill="#1a1a2a" />
+        <ellipse cx={GHOST_EYE_RIGHT.cx} cy={GHOST_EYE_RIGHT.cy} rx="1.7" ry="2.3" fill="#1a1a2a" />
+        {hasMouth && <ellipse cx={GHOST_MOUTH.cx} cy={GHOST_MOUTH.cy} rx={GHOST_MOUTH.rx} ry={GHOST_MOUTH.ry} fill="#1a1a2a" />}
+      </svg>
+    );
+    (isBackLayer ? backGhosts : frontGhosts).push(ghost);
+  }
+  return { back: backGhosts, front: frontGhosts };
+}
+
+// Pumpkin/jack-o-lantern shapes -- a stem, a rounded body, two faint
+// vertical ridge lines (all pumpkins get these three), and a carved
+// face overlay (only the ones renderPumpkins picks to light up, see
+// PUMPKIN_LIT_CHANCE, get this last one). Drawn in the same 24x24 box
+// LEAF_SHAPES above uses, so it falls through the exact same @keyframes
+// weather-fall physics unchanged -- see .pumpkin above.
+const PUMPKIN_STEM_PATH = "M11,5.5 L11,3 L13,3 L13,5.5 Z";
+const PUMPKIN_BODY_PATH = "M4,13 C4,8 7.5,5 12,5 C16.5,5 20,8 20,13 C20,18 16,21 12,21 C7.5,21 4,18 4,13 Z";
+const PUMPKIN_RIDGES_PATH = "M8,6.5 C7,10 7,16 8,19.5 M16,6.5 C17,10 17,16 16,19.5";
+const JACK_FACE_PATH = "M8,11 L10.5,12.5 L8,14 Z M16,11 L13.5,12.5 L16,14 Z M9,17 L11,15.5 L12,16.5 L13,15.5 L15,17 L13.5,18 L12,17 L10.5,18 Z";
+const PUMPKIN_COLORS = ["#e8791a", "#d9691a", "#f28c28", "#cf6516"];
+const PUMPKIN_LIT_CHANCE = 0.4; // ~40% render as lit jack-o-lanterns instead of plain pumpkins
+
+// Heavier/rounder than leaves, with less flutter/spin below (a pumpkin
+// doesn't tumble end over end the way a leaf does) -- raised closer to
+// leaves' own base per request, so the slider has more headroom at
+// 100% than the original, more conservative count allowed.
+const PUMPKINS_PIECE_COUNT_BASE = 28;
+
+function renderPumpkins(amount) {
+  const count = weatherPieceCount(PUMPKINS_PIECE_COUNT_BASE, amount);
+  const widgetHeight = measureWidgetHeight();
+  const backPumpkins = [];
+  const frontPumpkins = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const left = Math.round(r(1) * 100); // 0-100%
+    // Falls FROM the top -- same -2% to -8% off-screen band renderLeaves
+    // uses above, so turning pumpkins on reads as them entering from
+    // off-screen rather than just appearing everywhere at once.
+    const top = -(2 + r(2) * 6);
+    const size = 11 + Math.round(r(3) * 5); // px -- bigger than a leaf, needs room for the carved face to read
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3));
+    const drift = 20 + Math.round(r(5) * 35); // less wind-caught than a leaf -- a pumpkin is heavy
+    const flutter = 4 + Math.round(r(6) * 6);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (60 + Math.round(r(7) * 100)); // a light wobble, not a full tumble
+    const speed = 75 + Math.round(r(8) * 35); // px/s -- a bit slower/heavier-feeling than a leaf
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2); // positive -- see renderLeaves' own comment on why
+    const pieceOpacity = (0.85 + r(10) * 0.15).toFixed(2);
+    const isLit = r(11) < PUMPKIN_LIT_CHANCE;
+    const isBackLayer = r(12) < 0.5;
+    const piece = (
+      <svg
+        key={idx}
+        className={`pumpkin${isLit ? " pumpkin-lit" : ""}`}
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": pieceOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        <path d={PUMPKIN_STEM_PATH} fill="#5a3a1a" />
+        <path d={PUMPKIN_BODY_PATH} fill={PUMPKIN_COLORS[idx % PUMPKIN_COLORS.length]} stroke="rgba(0,0,0,0.4)" strokeWidth="0.8" strokeLinejoin="round" />
+        <path d={PUMPKIN_RIDGES_PATH} stroke="rgba(0,0,0,0.3)" strokeWidth="0.8" fill="none" />
+        {/* Only the lit ones (see isLit above) get the carved face --
+            plain pumpkins stop at the body/ridges above. */}
+        {isLit && <path d={JACK_FACE_PATH} fill="#fff3b0" />}
+      </svg>
+    );
+    (isBackLayer ? backPumpkins : frontPumpkins).push(piece);
+  }
+  return { back: backPumpkins, front: frontPumpkins };
+}
+
+// Cat silhouette built from separate simple primitives -- an ellipse
+// body, a circle head, two triangle ears, a curved stroked tail, and
+// four small rect legs -- rather than one complex outline. An earlier
+// single-path attempt (and a second, still-too-blobby one) didn't read
+// as a cat at this size; separating each part out into its own basic
+// shape is what finally did. Slimmer than that first pass (smaller
+// body/head radii, narrower legs) per request. Drawn facing LEFT (head/
+// ears at the low-x end, tail at the high-x end) in a 32x20 box -- see
+// @keyframes cat-walk above for how the walk direction flips this via
+// the scale property.
+const CAT_TAIL_PATH = "M20,13 C24,13 26,10.5 25,7.5";
+const CAT_LEG_XS = [11.5, 14.5, 17.5, 20];
+const CAT_EAR_LEFT = "M6,7 L5,3 L8.5,5.5 Z";
+const CAT_EAR_RIGHT = "M10,6.3 L11,2.5 L12.3,6 Z";
+
+// Cats only ever walk on two kinds of real surface -- a Now Playing
+// tile's own top edge, or one of the thin horizontal .section-divider
+// lines between dashboard sections -- never Recently Added posters and
+// never a bare "floor" guess (per request). Kept as two SEPARATE arrays
+// (not one merged list like the first pass) so renderCats can tell
+// "the top two tiles" apart from every divider -- see its own comment.
+// Unlike measureWeatherImpactSurfaces above (shared with rain's
+// splashes/snow's piles, which deliberately use each tile's "natural
+// resting" position so a splash doesn't visibly jump when the list
+// scrolls), this checks each tile's CURRENT on-screen rect against its
+// own scroll container's visible window -- a cat is continuously
+// visible, so it should only ever be offered a surface it can actually
+// be seen standing on right now, the same reasoning the Recently Added
+// posters loop above already uses for horizontal scrolling.
+function measureCatSurfaces(layerSelector) {
+  try {
+    const layer = document.querySelector(layerSelector);
+    if (!layer) return { tiles: [], dividers: [], layerHeight: 0 };
+    const layerRect = layer.getBoundingClientRect();
+    if (!layerRect.width || !layerRect.height) return { tiles: [], dividers: [], layerHeight: 0 };
+    const tiles = [];
+    const dividers = [];
+
+    const scrollEl = document.querySelector(".now-playing-scroll");
+    if (scrollEl) {
+      const scrollRect = scrollEl.getBoundingClientRect();
+      const tileEls = scrollEl.querySelectorAll(".media-row");
+      for (let i = 0; i < tileEls.length; i++) {
+        const r = tileEls[i].getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        const visTop = Math.max(r.top, scrollRect.top);
+        const visBottom = Math.min(r.bottom, scrollRect.bottom);
+        if (visBottom <= visTop) continue; // scrolled out of view
+        tiles.push({
+          leftPct: ((r.left - layerRect.left) / layerRect.width) * 100,
+          rightPct: ((r.right - layerRect.left) / layerRect.width) * 100,
+          topPx: r.top - layerRect.top,
+          // The tile's own real measured width in px, for callers that
+          // need to size something 1:1 in real pixels instead of a
+          // percentage-scaled viewBox (not just leftPct/rightPct).
+          widthPx: r.width,
+        });
+      }
+    }
+
+    // Section dividers live in the main (non-scrolling) dashboard flow
+    // -- no clipping check needed, a plain rect is enough.
+    const dividerEls = document.querySelectorAll(".section-divider");
+    for (let i = 0; i < dividerEls.length; i++) {
+      const r = dividerEls[i].getBoundingClientRect();
+      if (!r.width) continue;
+      dividers.push({
+        leftPct: ((r.left - layerRect.left) / layerRect.width) * 100,
+        rightPct: ((r.right - layerRect.left) / layerRect.width) * 100,
+        topPx: r.top - layerRect.top,
+      });
+    }
+
+    return { tiles, dividers, layerHeight: layerRect.height };
+  } catch (e) {
+    return { tiles: [], dividers: [], layerHeight: 0 };
+  }
+}
+
+function renderCats(amount) {
+  const raw = measureCatSurfaces(".halloween-layer-front");
+  const widgetHeight = raw.layerHeight || measureWidgetHeight();
+  // Belt-and-suspenders against anything still outside the visible
+  // widget height -- same reasoning as the tile-clipping check above.
+  const onScreen = (s) => s.topPx >= 0 && s.topPx <= widgetHeight;
+  const tileSurfaces = raw.tiles.filter(onScreen);
+  const dividerSurfaces = raw.dividers.filter(onScreen);
+  // The top two Now Playing tiles (tileSurfaces is already in the same
+  // top-to-bottom DOM order the tiles themselves render in) always get
+  // a cat, regardless of the Cats amount slider below -- per request.
+  // Every section divider currently on screen is a possible surface for
+  // an ADDITIONAL cat beyond those two -- how many of those actually
+  // show is what the slider controls, 0 at 0% up to every divider at
+  // 100%. So the absolute max a fully-populated widget can ever show is
+  // exactly "however many dividers there are, plus the top two tiles",
+  // same count the request itself describes.
+  const mandatoryTileSurfaces = tileSurfaces.slice(0, 2);
+  const extraCatCount = weatherPieceCount(dividerSurfaces.length, amount);
+  const dividerCatSurfaces = dividerSurfaces.slice(0, extraCatCount);
+  const catSurfaces = [...mandatoryTileSurfaces, ...dividerCatSurfaces];
+  // Nothing to stand on right now (nothing playing, no dividers
+  // visible) -- no floor fallback anymore (per request), so no cats
+  // render at all until a real surface exists again.
+  if (catSurfaces.length === 0) return [];
+  const cats = [];
+  for (let idx = 0; idx < catSurfaces.length; idx++) {
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const s = catSurfaces[idx];
+    const leftPct = s.leftPct;
+    const rightPct = s.rightPct;
+    const topPx = s.topPx;
+    const size = 20 + Math.round(r(2) * 8); // px wide, 32x20 viewBox -- slimmer/smaller than the first pass
+    const height = Math.round(size * (20 / 32));
+    // Patrol range inset a bit from the surface's own edges so the cat
+    // visibly turns around before it would hang off either side.
+    const span = Math.max(rightPct - leftPct, 8);
+    const inset = span * 0.08;
+    const xStart = leftPct + inset;
+    const xEnd = rightPct - inset;
+    // Slow and relaxed, not the earlier faster constant-speed walk that
+    // read as racing/on a track -- @keyframes cat-walk's ease-in-out
+    // timing (not linear) settles the rest of that by easing into and
+    // out of each turn-around instead of a robotic constant speed.
+    const duration = (18 + r(3) * 10).toFixed(2);
+    const delay = (r(4) * 18).toFixed(2);
+    // A little hop every once in a while, not every lap -- @keyframes
+    // cat-hop plays on its OWN much longer cycle (a few multiples of
+    // this cat's own walk duration below), fully decoupled from the
+    // walk's own left-right phase, so a hop lands at a different point
+    // along the patrol each time rather than always the same spot.
+    const hopDuration = (duration * (3 + Math.floor(r(5) * 3))).toFixed(2);
+    const hopDelay = (r(6) * hopDuration).toFixed(2);
+    cats.push(
+      <svg
+        key={idx}
+        className="cat"
+        viewBox="0 0 32 20"
+        style={{
+          // The svg's own top-left corner sits at topPx - height so its
+          // BOTTOM (feet) lands right on the surface, not its top.
+          top: `${topPx - height}px`,
+          width: `${size}px`,
+          height: `${height}px`,
+          "--cat-x-start": `${xStart}%`,
+          "--cat-x-end": `${xEnd}%`,
+          // Two independent animations on the same element (see
+          // .cat/@keyframes cat-walk/cat-hop above) -- comma-separated
+          // duration/delay map positionally to animation-name's own
+          // comma-separated list, cat-walk first then cat-hop.
+          animationDuration: `${duration}s, ${hopDuration}s`,
+          animationDelay: `${delay}s, ${hopDelay}s`,
+        }}
+      >
+        <path d={CAT_TAIL_PATH} stroke="#141414" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        {CAT_LEG_XS.map((x, legIdx) => (
+          <rect key={legIdx} x={x} y="15" width="1.4" height="3.5" rx="0.4" fill="#141414" />
+        ))}
+        <ellipse cx="16" cy="13" rx="6.5" ry="4.5" fill="#141414" />
+        <circle cx="8.5" cy="9.5" r="4" fill="#141414" />
+        <path d={CAT_EAR_LEFT} fill="#141414" />
+        <path d={CAT_EAR_RIGHT} fill="#141414" />
+      </svg>
+    );
+  }
+  return cats;
+}
+
+// --- Christmas (Weather menu) -------------------------------------------
+// Three independently-optional pieces once the master Christmas toggle
+// itself is on (see TOGGLE_CHRISTMAS/TOGGLE_SANTA/TOGGLE_MISTLETOE/
+// TOGGLE_ORNAMENTS above): a flying Santa + reindeer silhouette, falling
+// mistletoe, and falling ornaments. Same "simple separate primitives,
+// not one dense path" approach as the Halloween art above -- verified by
+// rendering each shape to a PNG and eyeballing it at realistic small
+// in-widget size before settling on this one, same as the cat needed.
+
+// A real reindeer-team + sleigh image, photo-traced rather than hand-
+// drawn like the rest of this file's weather art (though it renders as
+// a plain near-black silhouette -- see SANTA_COLOR_PRESETS' own comment
+// on why that's recolorable) -- traced to a transparent PNG, base64-
+// embedded the same way STREAMPULSE_LOGO above is. Drawn facing/
+// traveling right and climbing (reindeer team leading on the low-x,
+// low-y end, sleigh trailing on the high-x, high-y end) -- see
+// .santa-sleigh/flySantaLap above for how the continuous, per-lap
+// direction/climb/resize loop works.
+const SANTA_SLEIGH_IMAGE = "data:image/png;base64,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";
+
+// Drives one lap of Santa's flight via the Web Animations API (same
+// element.animate() idiom as triggerLightningStrike above) rather than a
+// CSS @keyframes loop -- each lap gets a brand-new .animate() call built
+// from literal, just-computed from/to values, so there's nothing left
+// for the browser to reinterpret mid-loop the way a continuously-running
+// CSS animation referencing custom properties can (that's what used to
+// occasionally leave the sleigh not fully clear of the edge at the
+// START of a lap -- per request: "santa needs to always start off
+// screen"). When one lap's animation finishes, this schedules the next
+// lap itself (see the .onfinish handler below), so the flight keeps
+// looping for as long as the element stays mounted (santaEnabled).
+const SANTA_CLIMB_DELTA_PCT = 26; // top-start minus top-end, fixed -- the climb angle itself never changes, only where on the widget it happens.
+const SANTA_OFFSCREEN_MARGIN_PX = 20; // extra clearance past "just barely off-screen" so no edge pixel ever peeks in.
+function flySantaLap(el) {
+  try {
+    if (!el || !el.isConnected) return; // santaEnabled turned off -- stop the loop, nothing left to animate
+    // A different size every lap (per request) -- 70-150px wide, with
+    // height derived from the image's own measured aspect ratio so it
+    // never looks squashed/stretched.
+    const width = 70 + Math.random() * 80;
+    const height = width * (128 / 420);
+    el.style.width = `${width}px`;
+    el.style.height = `${height}px`;
+    // A different vertical band every lap too (per request: "going in
+    // other areas ... not just in the same spot"), not just a different
+    // size in the same spot. Pick the END (top, less-constrained-by-
+    // clipping) point first, in the top 2-40% of the widget, then derive
+    // the START point from the fixed climb delta above -- that keeps
+    // the exact same climb angle every lap while moving the whole band
+    // around.
+    const topEnd = 2 + Math.random() * 38;
+    const topStart = topEnd + SANTA_CLIMB_DELTA_PCT;
+    // Sometimes flies in from the left, sometimes from the right (per
+    // request) -- a genuine per-lap coin flip, not a fixed direction
+    // every time. leftToRight keeps the original "climbs up and to the
+    // right" look; the reverse lap mirrors the silhouette (scaleX(-1))
+    // so the reindeer team still visibly LEADS the sleigh in whichever
+    // direction it's actually traveling that lap, rather than looking
+    // like it's being dragged backward. Either way, the START edge is a
+    // real pixel offset sized to THIS lap's own width + margin (not a
+    // plain percentage -- a modest widget's -25% can be smaller than
+    // the sleigh's own 150px max width) and the END edge is a fixed
+    // calc(100% + margin), which clears the opposite side no matter how
+    // wide the widget is -- so the sleigh is always fully off-screen at
+    // the start of every lap, both directions.
+    const leftToRight = Math.random() < 0.5;
+    const offscreenPx = `${(-(width + SANTA_OFFSCREEN_MARGIN_PX)).toFixed(1)}px`;
+    const offscreenCalc = `calc(100% + ${SANTA_OFFSCREEN_MARGIN_PX}px)`;
+    const leftFrom = leftToRight ? offscreenPx : offscreenCalc;
+    const leftTo = leftToRight ? offscreenCalc : offscreenPx;
+    el.style.transform = leftToRight ? "scaleX(1)" : "scaleX(-1)";
+    // A little natural variation lap to lap, same range as before.
+    const durationMs = (10 + Math.random() * 6) * 1000;
+    el.style.left = leftFrom;
+    el.style.top = `${topStart.toFixed(1)}%`;
+    const anim = el.animate(
+      [
+        { left: leftFrom, top: `${topStart.toFixed(1)}%` },
+        { left: leftTo, top: `${topEnd.toFixed(1)}%` },
+      ],
+      { duration: durationMs, easing: "linear", fill: "forwards" }
+    );
+    anim.onfinish = () => flySantaLap(el);
+  } catch (err) {
+    // purely decorative -- never worth breaking the widget over
+  }
+}
+
+// A single persistent element, not a per-render array -- same
+// "always mounted while its toggle is on, CSS/JS animates it" shape as
+// .bat, just one instance instead of a whole population. A masked <div>
+// rather than a plain <img> (per request: "color choices for santa
+// since its a silhouette") -- mask-image uses the traced PNG's own
+// alpha channel as a stencil, background-color (--santa-rgb, see
+// SANTA_COLOR_PRESETS) paints it, so the same silhouette can be any
+// preset color instead of being stuck at its own traced-in near-black.
+// The ref callback starts the very first lap the instant the element
+// mounts; flySantaLap itself schedules every lap after that (see its
+// own comment), so nothing further is needed here once it's kicked off.
+function renderSantaSleigh() {
+  return (
+    <div
+      className="santa-sleigh"
+      style={{ WebkitMaskImage: `url(${SANTA_SLEIGH_IMAGE})`, maskImage: `url(${SANTA_SLEIGH_IMAGE})` }}
+      ref={(el) => {
+        if (el && !el.dataset.flying) {
+          el.dataset.flying = "1";
+          flySantaLap(el);
+        }
+      }}
+    />
+  );
+}
+
+// A simple two-leaf sprig with a berry cluster at the base -- same
+// straight-down @keyframes weather-fall physics as pumpkins (see
+// .mistletoe above), just a different silhouette/palette.
+const MISTLETOE_BERRY_POSITIONS = [
+  { cx: 10.5, cy: 16 },
+  { cx: 13.5, cy: 16 },
+  { cx: 12, cy: 18.5 },
+];
+const MISTLETOE_PIECE_COUNT_BASE = 22;
+
+function renderMistletoe(amount) {
+  const count = weatherPieceCount(MISTLETOE_PIECE_COUNT_BASE, amount);
+  const widgetHeight = measureWidgetHeight();
+  const backSprigs = [];
+  const frontSprigs = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const left = Math.round(r(1) * 100);
+    const top = -(2 + r(2) * 6);
+    const size = 10 + Math.round(r(3) * 4);
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3));
+    const drift = 20 + Math.round(r(5) * 30);
+    const flutter = 6 + Math.round(r(6) * 8);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (80 + Math.round(r(7) * 120));
+    const speed = 70 + Math.round(r(8) * 35);
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2);
+    const pieceOpacity = (0.85 + r(10) * 0.15).toFixed(2);
+    const isBackLayer = r(11) < 0.5;
+    const piece = (
+      <svg
+        key={idx}
+        className="mistletoe"
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": pieceOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        <ellipse cx="9" cy="8" rx="3" ry="6.5" fill="#2e7d4f" transform="rotate(-25 9 8)" />
+        <ellipse cx="15" cy="8" rx="3" ry="6.5" fill="#2e7d4f" transform="rotate(25 15 8)" />
+        {MISTLETOE_BERRY_POSITIONS.map((b, i) => (
+          <circle key={i} cx={b.cx} cy={b.cy} r="2" fill="#f5f5f0" />
+        ))}
+      </svg>
+    );
+    (isBackLayer ? backSprigs : frontSprigs).push(piece);
+  }
+  return { back: backSprigs, front: frontSprigs };
+}
+
+// A round bauble -- body, a small gold cap, a loop hook, and a soft
+// highlight for shine -- in the same colors-per-piece idea as
+// PUMPKIN_COLORS above. Same weather-fall physics as mistletoe/pumpkins,
+// just tumbles a bit more (light and round, not heavy like a pumpkin).
+const ORNAMENT_COLORS = ["#c0392b", "#1e5f8c", "#2e7d4f", "#c9a227", "#8e44ad"];
+const ORNAMENTS_PIECE_COUNT_BASE = 26;
+
+function renderOrnaments(amount) {
+  const count = weatherPieceCount(ORNAMENTS_PIECE_COUNT_BASE, amount);
+  const widgetHeight = measureWidgetHeight();
+  const backOrnaments = [];
+  const frontOrnaments = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 1000 + n);
+    const left = Math.round(r(1) * 100);
+    const top = -(2 + r(2) * 6);
+    const size = 10 + Math.round(r(3) * 5);
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3));
+    const drift = 15 + Math.round(r(5) * 25);
+    const flutter = 3 + Math.round(r(6) * 5);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (100 + Math.round(r(7) * 140));
+    const speed = 80 + Math.round(r(8) * 35);
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2);
+    const pieceOpacity = (0.85 + r(10) * 0.15).toFixed(2);
+    const color = ORNAMENT_COLORS[idx % ORNAMENT_COLORS.length];
+    const isBackLayer = r(11) < 0.5;
+    const piece = (
+      <svg
+        key={idx}
+        className="ornament"
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": pieceOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        <circle cx="12" cy="14" r="8" fill={color} />
+        <rect x="10" y="4" width="4" height="3" rx="1" fill="#c9a227" />
+        <circle cx="12" cy="2.3" r="1.5" fill="none" stroke="#c9a227" strokeWidth="1" />
+        <ellipse cx="9" cy="11" rx="2" ry="3" fill="rgba(255,255,255,0.35)" />
+      </svg>
+    );
+    (isBackLayer ? backOrnaments : frontOrnaments).push(piece);
+  }
+  return { back: backOrnaments, front: frontOrnaments };
+}
+
+// A gingerbread man -- same "simple separate primitives, not one dense
+// path" approach as everything else here: legs/arms/torso as rounded
+// rects (drawn legs-then-arms-then-torso so the torso's corners cover
+// the limb roots cleanly), a circle head, and plain white-icing shapes
+// (dot eyes, a curved smile, three buttons, and cuff rects at each
+// wrist/ankle) -- verified by rendering to a PNG and eyeballing it at
+// realistic small in-widget size before committing, same as the rest of
+// this file's art. Same weather-fall physics as mistletoe/ornaments,
+// just a heavier tumble (a cookie, not a light bauble).
+const GINGERBREAD_BROWN = "#a5672f";
+const GINGERBREAD_ICING = "#fff8e7";
+const GINGERBREAD_PIECE_COUNT_BASE = 16;
+
+function renderGingerbread(amount) {
+  const count = weatherPieceCount(GINGERBREAD_PIECE_COUNT_BASE, amount);
+  const widgetHeight = measureWidgetHeight();
+  const backMen = [];
+  const frontMen = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 2000 + n);
+    const left = Math.round(r(1) * 100);
+    const top = -(2 + r(2) * 6);
+    const size = 11 + Math.round(r(3) * 5);
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3));
+    const drift = 12 + Math.round(r(5) * 20);
+    const flutter = 3 + Math.round(r(6) * 5);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (60 + Math.round(r(7) * 100));
+    const speed = 65 + Math.round(r(8) * 30);
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2);
+    const pieceOpacity = (0.85 + r(10) * 0.15).toFixed(2);
+    const isBackLayer = r(11) < 0.5;
+    const piece = (
+      <svg
+        key={idx}
+        className="gingerbread"
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": pieceOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        <rect x="7.3" y="14.5" width="3" height="7.2" rx="1.5" fill={GINGERBREAD_BROWN} transform="rotate(-18 8.8 14.5)" />
+        <rect x="13.7" y="14.5" width="3" height="7.2" rx="1.5" fill={GINGERBREAD_BROWN} transform="rotate(18 15.2 14.5)" />
+        <rect x="1.8" y="8.3" width="6.4" height="2.8" rx="1.4" fill={GINGERBREAD_BROWN} transform="rotate(-28 5 9.7)" />
+        <rect x="15.8" y="8.3" width="6.4" height="2.8" rx="1.4" fill={GINGERBREAD_BROWN} transform="rotate(28 19 9.7)" />
+        <rect x="8.2" y="8.6" width="7.6" height="8.4" rx="3.4" fill={GINGERBREAD_BROWN} />
+        <circle cx="12" cy="5.4" r="3.15" fill={GINGERBREAD_BROWN} />
+        <circle cx="10.8" cy="5" r="0.55" fill={GINGERBREAD_ICING} />
+        <circle cx="13.2" cy="5" r="0.55" fill={GINGERBREAD_ICING} />
+        <path d="M10.6,6.9 Q12,7.7 13.4,6.9" stroke={GINGERBREAD_ICING} strokeWidth="0.6" fill="none" strokeLinecap="round" />
+        <circle cx="12" cy="10.6" r="0.55" fill={GINGERBREAD_ICING} />
+        <circle cx="12" cy="12.6" r="0.55" fill={GINGERBREAD_ICING} />
+        <circle cx="12" cy="14.6" r="0.55" fill={GINGERBREAD_ICING} />
+        <rect x="6.4" y="12.2" width="2" height="1.3" rx="0.5" fill={GINGERBREAD_ICING} transform="rotate(-28 7.4 12.85)" />
+        <rect x="15.6" y="12.2" width="2" height="1.3" rx="0.5" fill={GINGERBREAD_ICING} transform="rotate(28 16.6 12.85)" />
+        <rect x="7.3" y="19.4" width="3" height="1.3" rx="0.5" fill={GINGERBREAD_ICING} transform="rotate(-18 8.8 20.05)" />
+        <rect x="13.7" y="19.4" width="3" height="1.3" rx="0.5" fill={GINGERBREAD_ICING} transform="rotate(18 15.2 20.05)" />
+      </svg>
+    );
+    (isBackLayer ? backMen : frontMen).push(piece);
+  }
+  return { back: backMen, front: frontMen };
+}
+
+// A glowing five-pointed star, per request ("north stars ... that
+// glow") -- one <polygon> (points worked out from the actual star-point
+// formula, not eyeballed) plus a small bright
+// center for a bit of sparkle, with the glow itself coming from the
+// .star CSS rule above (a fixed pale-gold drop-shadow -- stars don't
+// need the currentColor per-piece trick the multi-color light bulbs
+// use, since every star is the same color). Same weather-fall physics
+// as the other falling pieces, just drifting a little more lazily (a
+// star falling is more of a gentle glide than a tumble).
+const STAR_POINTS = "12.00,4.00 14.00,9.25 19.61,9.53 15.23,13.05 16.70,18.47 12.00,15.40 7.30,18.47 8.77,13.05 4.39,9.53 10.00,9.25";
+const STARS_PIECE_COUNT_BASE = 18;
+
+function renderStars(amount) {
+  const count = weatherPieceCount(STARS_PIECE_COUNT_BASE, amount);
+  const widgetHeight = measureWidgetHeight();
+  const backStars = [];
+  const frontStars = [];
+  for (let idx = 0; idx < count; idx++) {
+    const r = (n) => pseudoRandom(idx * 3000 + n);
+    const left = Math.round(r(1) * 100);
+    const top = -(2 + r(2) * 6);
+    const size = 9 + Math.round(r(3) * 5);
+    const fall = Math.round(widgetHeight * (1.1 + r(4) * 0.3));
+    const drift = 10 + Math.round(r(5) * 18);
+    const flutter = 2 + Math.round(r(6) * 4);
+    const spin = (idx % 2 === 0 ? 1 : -1) * (40 + Math.round(r(7) * 80));
+    const speed = 55 + Math.round(r(8) * 25);
+    const durationNum = fall / speed;
+    const duration = durationNum.toFixed(2);
+    const delay = (r(9) * durationNum).toFixed(2);
+    const pieceOpacity = (0.85 + r(10) * 0.15).toFixed(2);
+    const isBackLayer = r(11) < 0.5;
+    const piece = (
+      <svg
+        key={idx}
+        className="star"
+        viewBox="0 0 24 24"
+        style={{
+          left: `${left}%`,
+          top: `${top}%`,
+          width: `${size}px`,
+          height: `${size}px`,
+          "--weather-fall": `${fall}px`,
+          "--weather-drift": `${drift}px`,
+          "--weather-flutter": `${flutter}px`,
+          "--weather-spin": `${spin}deg`,
+          "--weather-piece-opacity": pieceOpacity,
+          animationDuration: `${duration}s`,
+          animationDelay: `${delay}s`,
+        }}
+      >
+        <polygon points={STAR_POINTS} fill="#fdf1b8" />
+        <circle cx="12" cy="11.2" r="1.3" fill="rgba(255,255,255,0.85)" />
+      </svg>
+    );
+    (isBackLayer ? backStars : frontStars).push(piece);
+  }
+  return { back: backStars, front: frontStars };
+}
+
+// Forked hairline-crack paths -- a jagged stem from the top, some
+// forking partway down into one or two further jagged branches, some
+// not forking at all. A prior version pulled every point 35% of the
+// way toward the straight line between its segment's endpoints to calm
+// the zigzag down, but that (combined with every bolt sharing the same
+// "single stem forks into two roughly mirrored arms at mid-height"
+// shape) made each strike read as a plain upside-down Y rather than a
+// crack (per request: "they dont look like an upside down Y") -- and
+// with only that one shape's numbers nudged slightly four ways, back-
+// to-back strikes barely looked different from each other either (per
+// request: "different at each strike"). Fixed on both counts: each
+// path's zigzag now mostly ALTERNATES side to side (not a pure random
+// walk, which tends to average itself back out into a near-straight
+// line -- see the generator this was built with, kept in
+// /scratchpad for future reference) so the kinks stay visible, and the
+// eight shapes below vary independently on every axis that makes a
+// bolt look different -- how far down it forks (some fork near the
+// top, some near the bottom, two don't fork at all), how many branches
+// it grows (0, 1, or 2), how long/asymmetric those branches are, and
+// which way the whole bolt leans. Still drawn as a stroked line
+// (fill:none/stroke on .lightning-bolt path above), and a forked
+// entry's string is still multiple subpaths in one `d` (multiple
+// M...L commands are valid SVG): the shared stem, then each branch,
+// starting from wherever the stem forks. triggerLightningStrike below
+// picks one at random (Math.random(), not the index-derived
+// pseudoRandom used elsewhere) for each strike -- unlike the per-piece
+// weather effects, there's only ever one bolt element on screen at a
+// time and it's only touched at the instant of a strike, so a fresh
+// random pick per strike can't cause the "jumps mid-animation on a
+// still-running loop" problem that ruled out Math.random() elsewhere in
+// this file.
+const LIGHTNING_BOLT_PATHS = [
+  "M18.0,0.0 L14.2,9.3 L22.5,19.4 L14.8,32.6 L22.6,41.9 L15.5,51.6 L13.0,62.0 M13.0,62.0 L10.2,71.6 L4.3,81.0 L11.4,87.0 L2.0,92.0 M13.0,62.0 L14.2,68.2 L12.2,75.0 L13.0,81.1 L22.0,88.0",
+  "M23.0,0.0 L20.1,9.1 L26.0,19.6 L25.7,30.2 L25.7,36.6 L19.5,42.0 L27.9,50.2 L20.3,57.7 L19.1,69.4 L28.3,80.2 L25.8,90.3 L20.1,100.0",
+  "M17.0,0.0 L14.1,4.3 L19.6,10.6 L14.2,16.8 L20.4,23.9 L20.8,27.8 L14.0,32.0 M14.0,32.0 L3.4,36.8 L2.8,45.9 L10.4,54.6 L3.1,63.3 L9.8,72.1 L1.9,80.5 L-1.0,90.0",
+  "M22.0,0.0 L18.2,8.9 L25.8,24.7 L17.9,40.0 L24.7,58.5 L25.1,69.3 L17.9,80.0 M17.9,80.0 L20.6,85.8 L26.0,89.5 L28.9,95.0",
+  "M20.0,0.0 L24.4,10.0 L25.3,14.1 L16.5,22.7 L23.3,27.7 L16.8,37.8 L15.1,42.0 M15.1,42.0 L14.0,52.3 L7.2,58.5 L13.8,69.7 L5.1,78.0 M15.1,42.0 L16.7,54.9 L25.1,65.5 L16.7,80.6 L29.1,97.0",
+  "M24.0,0.0 L20.3,8.3 L26.9,17.7 L21.5,26.5 L26.9,35.5 L28.5,44.2 L19.7,55.0 M19.7,55.0 L14.2,62.3 L6.9,68.9 L14.5,72.3 L6.5,77.9 L13.6,84.2 L2.7,89.0",
+  "M16.0,0.0 L12.3,8.4 L10.4,18.7 L21.7,30.1 L10.8,36.9 L12.8,46.9 L20.4,56.6 L19.4,65.9 L10.6,71.4 L19.7,76.2 L10.4,83.6 L21.7,93.5 L10.8,100.0",
+  "M21.0,0.0 L17.5,9.1 L24.0,23.3 L17.8,34.0 L25.4,43.2 L25.8,55.6 L18.0,68.0 M18.0,68.0 L27.6,73.0 L22.0,77.5 L21.4,80.6 L28.5,85.5 L31.0,91.0",
+];
+
+function renderLightningBolt() {
+  return (
+    <svg className="lightning-bolt" viewBox="0 0 40 100" preserveAspectRatio="xMidYMid meet">
+      <path d={LIGHTNING_BOLT_PATHS[0]} />
+    </svg>
+  );
+}
+
+// Genuinely random lightning: struck every 5-10s (Math.random(), a
+// fresh randomly-picked delay each time, not a fixed cadence) at a
+// random horizontal spot with a random crack shape, rather than cycling
+// through fixed positions in a fixed order. This is a one-shot visual
+// effect with no bearing on app state, so it's driven straight off a
+// setTimeout loop started once from init() and talks to the DOM
+// directly (document.querySelector, same pattern already used by
+// syncSnowOpacity/syncRainOpacity/syncLeavesOpacity above) rather than
+// going through React/dispatch -- there's nothing to re-render, only
+// the .lightning-layer's own two children (present in the DOM only
+// while rain+storm are both on) to flash. Uses the Web Animations API
+// (element.animate()) for the one-off flicker rather than a CSS
+// @keyframes loop, since a random-interval event isn't a loop.
+function triggerLightningStrike() {
+  try {
+    const layer = document.querySelector(".lightning-layer");
+    if (!layer) return; // rain+storm aren't both on right now -- nothing to strike
+    const glow = layer.querySelector(".lightning-glow");
+    const boltEl = layer.querySelector(".lightning-bolt");
+    const boltPath = boltEl && boltEl.querySelector("path");
+    if (!glow || !boltEl || !boltPath) return;
+
+    const xPct = (10 + Math.random() * 80).toFixed(1); // 10-90%, off the very edges
+    const yPct = (15 + Math.random() * 55).toFixed(1);
+    // Brighter core, wider spread before it falls off to nothing --
+    // more of the tile visibly lights up per strike, not just a small
+    // spot glow.
+    glow.style.background = `radial-gradient(circle at ${xPct}% ${yPct}%, rgba(255,255,255,1), rgba(215,230,255,0.65) 45%, transparent 80%)`;
+    boltEl.style.left = `${xPct}%`;
+    boltPath.setAttribute("d", LIGHTNING_BOLT_PATHS[Math.floor(Math.random() * LIGHTNING_BOLT_PATHS.length)]);
+
+    // Most strikes are a fierce hit -- an instant near-full SNAP, a
+    // quick stutter (real lightning rarely flashes just once), then a
+    // fainter aftershock before going dark; some are a single lighter
+    // flicker instead -- varied strength, not a uniform pulse every
+    // time. Peaks land at an early offset (a sudden hit) rather than
+    // easing up to them, for more impact.
+    const isMainStrike = Math.random() < 0.72;
+    const glowFrames = isMainStrike
+      ? [{ opacity: 0 }, { opacity: 1, offset: 0.08 }, { opacity: 0.15, offset: 0.18 }, { opacity: 0.95, offset: 0.26 }, { opacity: 0.2, offset: 0.38 }, { opacity: 0.75, offset: 0.48 }, { opacity: 0, offset: 0.68 }]
+      : [{ opacity: 0 }, { opacity: 0.55, offset: 0.28 }, { opacity: 0, offset: 0.58 }];
+    const boltFrames = isMainStrike
+      ? [{ opacity: 0 }, { opacity: 1, offset: 0.08 }, { opacity: 0.15, offset: 0.18 }, { opacity: 1, offset: 0.26 }, { opacity: 0.2, offset: 0.38 }, { opacity: 0.9, offset: 0.48 }, { opacity: 0, offset: 0.68 }]
+      : [{ opacity: 0 }, { opacity: 0.8, offset: 0.28 }, { opacity: 0, offset: 0.58 }];
+    glow.animate(glowFrames, { duration: isMainStrike ? 780 : 550, easing: "linear" });
+    boltEl.animate(boltFrames, { duration: isMainStrike ? 780 : 550, easing: "linear" });
+  } catch (e) {
+    // purely decorative -- never worth breaking the widget over
+  }
+}
+
+function scheduleNextLightningStrike() {
+  // A moment roughly every 20-25s -- most of the time a single flash,
+  // but sometimes (real storms do this) a rapid one-two: a second,
+  // independent flash fired very close behind the first. Which one
+  // happens is random per moment, not a fixed pattern every cycle --
+  // that's what actually reads as realistic instead of mechanical.
+  const delayMs = 20000 + Math.random() * 5000; // 20-25s between moments
+  setTimeout(() => {
+    triggerLightningStrike();
+    if (Math.random() < 0.4) {
+      // ~40% of moments get a quick second strike close behind the
+      // first -- its own random position/shape/strength, so it reads
+      // as a genuinely separate hit, not a repeat of the same one.
+      const gapMs = 150 + Math.random() * 350; // 150-500ms -- very close apart
+      setTimeout(() => {
+        triggerLightningStrike();
+      }, gapMs);
+    }
+    scheduleNextLightningStrike();
+  }, delayMs);
+}
+
+function renderStreamTile(s, i, ctx) {
+  const { machineIdentifier, confirmingSessionId, pausedAt, sessionCountByUser, compact, stacked, topUser, confettiEnabled } = ctx;
+        const pct = s.duration ? Math.min(100, Math.max(0, (s.viewOffset / s.duration) * 100)) : 0;
+        const remainingMs = s.duration != null && s.viewOffset != null ? Math.max(0, s.duration - s.viewOffset) : null;
+        const poster = posterUrl(s);
+        const webUrl = itemWebUrl(machineIdentifier, s);
+        const info = getStreamInfo(s);
+        const playback = getPlaybackFormatInfo(s);
+        const sessionId = s.Session && s.Session.id;
+        const isConfirming = confirmingSessionId === sessionId;
+        const isPaused = s.Player && s.Player.state === "paused";
+        const pausedSinceMs = isPaused && sessionId && pausedAt[sessionId] ? Date.now() - pausedAt[sessionId] : null;
+        const rowClass = `media-row ${isPaused ? "row-paused" : "active-glow"}${compact ? " media-row-compact" : ""}${stacked ? " media-row-stacked" : ""}`;
+        const rowArtUrl = sessionArtUrl(s);
+        const avatarUrl = userAvatarUrl(s);
+        const username = (s.User && s.User.title) || "Unknown";
+        const ip = (s.Player && (s.Player.remotePublicAddress || s.Player.address)) || null;
+        const isMultiStream = (sessionCountByUser[username] || 0) >= 2;
+        // Confetti for whoever's in first place today by finished play
+        // count (see pollHistory's topUser) -- fires the instant that
+        // name shows up on one of their own currently-playing tiles, no
+        // extra delay beyond however fresh topUser itself is.
+        const isTopUserTile = confettiEnabled && !!topUser && username === topUser;
+        const addedLabel = formatAddedDate(s.addedAt);
+        return (
+          // Keyed by the actual session id, not the array index -- when the
+          // poll refresh reorders/inserts sessions (a new stream starting
+          // shifts everyone after it), an index key makes React tear down
+          // and rebuild whichever tile's index the multi-stream conditional
+          // toggles on, destroying and recreating its .multi-stream-alert
+          // DOM. A freshly-created node doesn't count as hovered until the
+          // cursor actually moves again (browsers only re-run hit-testing
+          // on real mouse movement, not on DOM changes), which is why the
+          // tooltip could take a few seconds to show up, and why two tiles
+          // for the same account could flash different counts -- they were
+          // two different rebuilds of the same slot moments apart, not two
+          // sessions genuinely disagreeing. Keying by session id keeps the
+          // same tile's DOM stable across refreshes as long as the session
+          // itself hasn't ended, so hover just keeps working normally.
+          <div key={sessionId || i} className={rowClass}>
+            {rowArtUrl && <div className="row-backdrop-art" style={{ backgroundImage: `url(${rowArtUrl})` }} />}
+            {avatarUrl && (
+              <img className="user-avatar" src={avatarUrl} onError={hideOnError} title={username} />
+            )}
+            <div className="media-row-content">
+            {poster && (
+              <img className="poster-large" src={poster} onError={hideOnError} onClick={() => openExternal(webUrl)} />
+            )}
+            <div className="media-body">
+              <div className="item">
+                <span className="item-title">{displayTitleForSession(s)}</span>
+                <span className="item-right">
+                  {isMultiStream && (
+                    <span className="multi-stream-alert" title={`${username} has ${sessionCountByUser[username]} streams playing at once`}>
+                      <span className="multi-stream-alert-icon">⚠️</span>
+                      <span className="multi-stream-alert-tooltip">{`${username} has ${sessionCountByUser[username]} streams playing at once`}</span>
+                    </span>
+                  )}
+                </span>
+              </div>
+              {!compact && s.type === "episode" && s.parentIndex != null && s.index != null && (
+                <div className="muted">
+                  Season {s.parentIndex}, Episode {s.index}
+                  {s.originallyAvailableAt && ` (Aired on ${formatAiredDate(s.originallyAvailableAt)})`}
+                </div>
+              )}
+              {!compact && s.type === "movie" && (
+                <div className="muted">
+                  Directed by: {s.Director && s.Director.length > 0 ? s.Director.map((d) => d.tag).join(", ") : "Unknown"}
+                  {s.originallyAvailableAt && ` (Premiered on ${formatAiredDate(s.originallyAvailableAt)})`}
+                </div>
+              )}
+              <div className="muted status-line">
+                <strong className="user-name">{username}</strong> · <span className={`state-${((s.Player && s.Player.state) || "").toLowerCase()}`}>{(s.Player && s.Player.state) || "?"}</span>
+                {pausedSinceMs != null && (
+                  <span className={`pause-timer${pausedSinceMs > 3600000 ? " pause-timer-flash" : ""}`}>
+                    {` (${formatTime(pausedSinceMs)})`}
+                  </span>
+                )}
+              </div>
+              {!compact && (
+              <div className="muted">
+                {(s.Player && s.Player.title) || "Unknown device"} ·{" "}
+                {ip ? (
+                  isMultiStream ? (
+                    <span className="ip-alert" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Multiple concurrent streams — click to look up this IP">
+                      {ip}
+                    </span>
+                  ) : (
+                    <span className="ip-link" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Click to look up this IP">
+                      {ip}
+                    </span>
+                  )
+                ) : (
+                  "IP unknown"
+                )}
+              </div>
+              )}
+              {!compact && (
+              <div className="muted">{formatTime(remainingMs)} left · {formatTime(s.duration)} total · ends {formatEndClock(remainingMs) || "--:--"}</div>
+              )}
+              <div className="stream-meta-row">
+                <span>
+                  <span className={`badge ${info.badgeClass}`}>
+                    {info.decisionLabel}
+                  </span>
+                  {!compact && playback.resolution && (
+                    <span className={`muted stream-format${playback.resolution.downgraded ? " stream-format-downgraded" : ""}`}>
+                      · {playback.resolution.label}
+                    </span>
+                  )}
+                  {!compact && playback.audio && (
+                    <span className={`muted stream-format${playback.audio.downgraded ? " stream-format-downgraded" : ""}`}>
+                      · {playback.audio.label}
+                    </span>
+                  )}
+                  {!compact && info.hwLabel && <span className="badge badge-hw">{info.hwLabel}</span>}
+                  {!compact && <span className="muted">{info.speedLabel || "—"}</span>}
+                </span>
+                <span className="stream-meta-right">
+                  {!compact && addedLabel && (
+                    <span className="added-date-label" title={`Added to library on ${addedLabel}`}>
+                      Added on {addedLabel}
+                    </span>
+                  )}
+                  {isConfirming ? (
+                    <span className="stop-confirm-group">
+                      <button
+                        className="stop-btn stop-btn-yes"
+                        onClick={() => stopSession(sessionId, displayTitleForSession(s))}
+                      >
+                        Yes
+                      </button>
+                      <button
+                        className="stop-btn stop-btn-no"
+                        onClick={() => dispatchRef && dispatchRef({ type: "CONFIRM_STOP", sessionId: null })}
+                      >
+                        No
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      className="stop-btn"
+                      onClick={() => dispatchRef && dispatchRef({ type: "CONFIRM_STOP", sessionId })}
+                    >
+                      Stop
+                    </button>
+                  )}
+                </span>
+              </div>
+              <div className="bar-track">
+                <div className="bar-fill" style={{ width: `${pct}%` }} />
+                {!isPaused && <div className="bar-buffer" style={{ width: `${Math.min(100 - pct, 12)}%` }} />}
+              </div>
+            </div>
+            </div>
+            {compact && (
+              <div className="stream-tile-tooltip">
+                {s.type === "episode" && s.parentIndex != null && s.index != null && (
+                  <div>
+                    Season {s.parentIndex}, Episode {s.index}
+                    {s.originallyAvailableAt && ` (Aired on ${formatAiredDate(s.originallyAvailableAt)})`}
+                  </div>
+                )}
+                {s.type === "movie" && (
+                  <div>
+                    Directed by: {s.Director && s.Director.length > 0 ? s.Director.map((d) => d.tag).join(", ") : "Unknown"}
+                    {s.originallyAvailableAt && ` (Premiered on ${formatAiredDate(s.originallyAvailableAt)})`}
+                  </div>
+                )}
+                <div>
+                  {(s.Player && s.Player.title) || "Unknown device"} ·{" "}
+                  {ip ? (
+                    isMultiStream ? (
+                      <span className="ip-alert" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Multiple concurrent streams — click to look up this IP">
+                        {ip}
+                      </span>
+                    ) : (
+                      <span className="ip-link" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Click to look up this IP">
+                        {ip}
+                      </span>
+                    )
+                  ) : (
+                    "IP unknown"
+                  )}
+                </div>
+                <div>{formatTime(remainingMs)} left · {formatTime(s.duration)} total · ends {formatEndClock(remainingMs) || "--:--"}</div>
+                <div>
+                  {playback.resolution && (
+                    <span className={`stream-format${playback.resolution.downgraded ? " stream-format-downgraded" : ""}`}>
+                      {playback.resolution.label}
+                    </span>
+                  )}
+                  {playback.audio && (
+                    <span className={`stream-format${playback.audio.downgraded ? " stream-format-downgraded" : ""}`}>
+                      {playback.resolution ? " · " : ""}{playback.audio.label}
+                    </span>
+                  )}
+                  {info.hwLabel && <span className="badge badge-hw">{info.hwLabel}</span>}
+                  {info.speedLabel && <span>{(playback.resolution || playback.audio) ? " · " : ""}{info.speedLabel}</span>}
+                </div>
+                {addedLabel && <div>Added on {addedLabel}</div>}
+              </div>
+            )}
+            {isTopUserTile && (
+              <div className="confetti-layer">
+                {renderConfettiPieces()}
+              </div>
+            )}
+          </div>
+        );
 }
 
 function displayTitleForSession(m) {
@@ -3452,8 +9365,9 @@ function findNowPlayingTopIndex(rows, containerTop, buffer) {
   // enough to the very LAST row that it comes out "closest" here — but
   // the last row has no next row to pair with, which collapsed the cap
   // to showing just that one tile instead of the final pair. Always
-  // leave room for a partner below by capping at rows.length - 2 (safe
-  // since this only ever runs with 3+ rows).
+  // leave room for a partner below by capping at rows.length - 2 (also
+  // correct with exactly 2 rows -- see measureNowPlayingCapHeight's
+  // dataCount handling -- since that always forces this to 0).
   return Math.min(topIndex, rows.length - 2);
 }
 
@@ -3479,7 +9393,13 @@ function findNowPlayingTopIndex(rows, containerTop, buffer) {
 // produces it. Confirmed empirically for the rest pair, a middle pair,
 // and the final pair, in both border-box and content-box.
 let lastMeasuredCapHeight = null;
-function measureNowPlayingCapHeight() {
+// dataCount is the real, authoritative number of streams this render is
+// about to draw (render() passes sessions.length) -- see below for why
+// that has to win over counting <div>s already in the DOM. Omitting it
+// (as onNowPlayingScroll's own call below does) falls back to counting
+// rows in the DOM, which is exactly right there since that call only
+// ever runs after a real scroll on an already-committed, accurate DOM.
+function measureNowPlayingCapHeight(dataCount) {
   try {
     const container = document.querySelector(".now-playing-scroll");
     if (!container) return lastMeasuredCapHeight;
@@ -3492,11 +9412,30 @@ function measureNowPlayingCapHeight() {
     // layout, and let it settle again once the pull resets to 0.
     if (pullState.distance > 0 || pullState.refreshing) return lastMeasuredCapHeight;
     const rows = container.querySelectorAll(":scope > .now-playing-tiles > .media-row");
-    // Below 3 tiles, leave the container uncapped — nothing should be
-    // able to scroll/shift upward with only 1 or 2 streams showing.
-    if (rows.length < 3) {
+    // Below 3 streams, leave the container uncapped — nothing should be
+    // able to scroll/shift upward with only 1 or 2 showing.
+    //
+    // This has to check the real stream count (dataCount), not just
+    // rows.length in the DOM right now. render() calls this to compute
+    // the maxHeight it's about to hand back as part of THIS render's
+    // JSX -- which means it necessarily runs before React commits that
+    // render's own new rows to the DOM. On the one render where a 3rd
+    // stream first shows up, rows.length here still reflects the OLD,
+    // 2-row DOM from the previous commit, so a DOM-only check would
+    // wrongly conclude "still just 2, stay uncapped" for that single
+    // render -- letting the widget balloon out to fit all 3 tiles for
+    // one frame before snapping back down to the capped height on the
+    // next poll. That balloon-then-snap was exactly the visible jump.
+    const effectiveCount = dataCount != null ? dataCount : rows.length;
+    if (effectiveCount < 3) {
       lastMeasuredCapHeight = null;
       return null;
+    }
+    if (rows.length < 2) {
+      // The DOM hasn't caught up with even 2 rows yet -- nothing usable
+      // to measure this instant, reuse whatever was last known rather
+      // than guessing.
+      return lastMeasuredCapHeight;
     }
 
     const GAP = 24; // matches .media-row's margin-bottom
@@ -3728,7 +9667,71 @@ export const render = ({
   plexAuthStatus,
   plexAuthError,
   plexAuthQuote,
+  sonarrCollapsed,
+  sonarrQueue,
+  sonarrMissingCount,
+  sonarrUpcoming,
+  sonarrDiskFree,
+  sonarrHealth,
   plexServerIssue,
+  streamsPopoutOpen,
+  streamsPopoutFullscreen,
+  streamsPopoutTileSize,
+  streamsPopoutColumns,
+  streamsPopoutRows,
+  streamsPopoutSort,
+  streamsPopoutSortDir,
+  streamsPopoutFilterUser,
+  streamsPopoutFilterState,
+  streamsPopoutFilterDecision,
+  streamsPopoutFilterType,
+  streamsPopoutFilterMultiOnly,
+  streamsPopoutSearch,
+  streamsPopoutBehind,
+  popoutAboutOpen,
+  dashboardHidden,
+  customServerTitle,
+  logoHidden,
+  confettiEnabled,
+  snowEnabled,
+  snowEnabledDisplayed,
+  snowStorm,
+  snowStormDisplayed,
+  snowGustDirection,
+  snowAmount,
+  rainEnabled,
+  rainEnabledDisplayed,
+  rainStorm,
+  rainStormDisplayed,
+  rainAmount,
+  leavesEnabled,
+  leavesEnabledDisplayed,
+  leavesStorm,
+  leavesStormDisplayed,
+  leavesAmount,
+  halloweenEnabled,
+  halloweenEnabledDisplayed,
+  batsEnabled,
+  batsAmount,
+  pumpkinsEnabled,
+  pumpkinsAmount,
+  catsEnabled,
+  catsAmount,
+  ghostsEnabled,
+  ghostsAmount,
+  christmasEnabled,
+  christmasEnabledDisplayed,
+  santaEnabled,
+  mistletoeEnabled,
+  mistletoeAmount,
+  ornamentsEnabled,
+  ornamentsAmount,
+  gingerbreadEnabled,
+  gingerbreadAmount,
+  starsEnabled,
+  starsAmount,
+  weatherMenuOpen,
+  editingServerTitle,
 }) => {
   if (!isPlexTokenConfigured() || plexAuthStatus === "success") {
     const signinOffline = plexAuthStatus === "success" ? !isOnline : true;
@@ -3774,14 +9777,18 @@ export const render = ({
   const pausedCount = sessions.filter((s) => s.Player && s.Player.state === "paused").length;
   // Caps Now Playing at 2 full tiles with the rest reachable by
   // scrolling — null on the very first render (nothing on the DOM to
-  // measure yet) or once fewer than 2 tiles exist, in which case it's
-  // left uncapped since there's nothing to scroll to anyway.
-  const nowPlayingCapHeight = measureNowPlayingCapHeight();
+  // measure yet) or once fewer than 3 streams exist, in which case it's
+  // left uncapped since there's nothing to scroll to anyway. Passing
+  // sessions.length (rather than leaving it to count rows already in the
+  // DOM) is what makes the cap take effect on the very render that adds
+  // a 3rd stream, instead of one render late -- see
+  // measureNowPlayingCapHeight's own comment for why that matters.
+  const nowPlayingCapHeight = measureNowPlayingCapHeight(sessions.length);
   // Which section is currently last among the visible ones — sections
   // can be hidden or reordered, so this isn't always "system". Only that
   // one skips its bottom divider, so the divider never ends up sitting
   // directly above the footer controls no matter what's hidden/reordered.
-  const lastVisibleSectionKey = ["nowPlaying", "recentAdded", "activity", "system"]
+  const lastVisibleSectionKey = ["nowPlaying", "recentAdded", "activity", "system", "sonarr"]
     .filter((k) => !hiddenSections.includes(k))
     .sort((a, b) => sectionOrder.indexOf(a) - sectionOrder.indexOf(b))
     .pop() || null;
@@ -3793,6 +9800,26 @@ export const render = ({
     const u = (s.User && s.User.title) || "Unknown";
     sessionCountByUser[u] = (sessionCountByUser[u] || 0) + 1;
   });
+  // Today's top user's own tile(s) float to the top of the main "Now
+  // Playing" list whenever they're actively streaming, ahead of
+  // everyone else -- a stable sort (native Array#sort is stable), so it
+  // only ever reorders "is this the top user or not"; everyone else
+  // keeps their existing relative order. A plain derived copy, not a
+  // mutation of `sessions` itself, since that array's own order is
+  // still used as-is elsewhere (sessionCountByUser above, the pop-out's
+  // own independent sort, totals, etc.). Tiles are keyed by session id
+  // (see renderStreamTile's key), not array index, so React just moves
+  // the existing DOM nodes into their new position instead of
+  // remounting them -- any mid-flight animation on a tile (confetti,
+  // the progress bar, etc.) keeps running uninterrupted through the
+  // reorder.
+  const sessionsForDisplay = topUser
+    ? [...sessions].sort((a, b) => {
+        const aIsTop = ((a.User && a.User.title) || "Unknown") === topUser ? 0 : 1;
+        const bIsTop = ((b.User && b.User.title) || "Unknown") === topUser ? 0 : 1;
+        return aIsTop - bIsTop;
+      })
+    : sessions;
   // Only streams actually playing right now — a paused stream isn't
   // transferring data, so it shouldn't count toward "current" bandwidth.
   const totalBandwidthKbps = sessions
@@ -3802,32 +9829,247 @@ export const render = ({
   const widgetUpdateAvailable = isNewerVersion(latestWidgetVersion, WIDGET_VERSION);
   const updatedSecondsAgo = lastUpdatedAt != null ? Math.max(0, Math.round((Date.now() - lastUpdatedAt) / 1000)) : null;
   const totalSpeedLabel = totalBandwidthKbps > 0 ? `${(totalBandwidthKbps / 1000).toFixed(1)} Mbps` : null;
-
+  const streamsPopoutFiltered = filterAndSortStreams(sessions, {
+    filterUser: streamsPopoutFilterUser,
+    filterState: streamsPopoutFilterState,
+    filterDecision: streamsPopoutFilterDecision,
+    filterType: streamsPopoutFilterType,
+    filterMultiOnly: streamsPopoutFilterMultiOnly,
+    search: streamsPopoutSearch,
+    sort: streamsPopoutSort,
+    sortDir: streamsPopoutSortDir,
+    sessionCountByUser,
+  });
+  // Small already always shows the compact/hover-tooltip layout, so
+  // these only matter (and are only measured) for medium/large.
+  const popoutMediumSqueezed = streamsPopoutTileSize === "medium" && measurePopoutMediumTileSqueezed();
+  const popoutLargeSqueezed = streamsPopoutTileSize === "large" && measurePopoutLargeTileSqueezed();
+  const popoutTileCompact = streamsPopoutTileSize === "small" || popoutMediumSqueezed;
+  const popoutTileStacked = (streamsPopoutTileSize === "medium" && !popoutMediumSqueezed) || popoutLargeSqueezed;
+  // Computed once (not once per layer) so both the "behind the tiles"
+  // and "in front of the tiles" rain layers below are rendering pieces
+  // from the very same pass over the same per-drop seeds -- see
+  // renderRaindrops' own backDrops/frontDrops split. Fed *StormDisplayed
+  // (what's actually currently drawn), not the raw snowStorm/rainStorm/
+  // leavesStorm target -- see snowStormDisplayed's own comment: toggling
+  // Storm fades the old piece set out, THEN swaps which set is rendered,
+  // THEN fades the new one in, rather than re-interpolating a live,
+  // still-animating population's speed/count/wind on every render.
+  // Gated on *EnabledDisplayed (what's actually mounted), not the raw
+  // *Enabled target -- see that state's own comment. Turning an effect
+  // off doesn't unmount this right away; it keeps rendering the exact
+  // same piece set (same idx-derived positions/timing), fading out over
+  // WEATHER_ENABLED_FADE_MS (see triggerWeatherEnabledFadeOut), until the
+  // SWAP action dispatched once that fade finishes actually flips
+  // *EnabledDisplayed -- so the whole layer settles out over that fade
+  // instead of the population vanishing the instant the button's clicked.
+  const raindrops = rainEnabledDisplayed ? renderRaindrops(rainStormDisplayed, rainAmount) : null;
+  const snowflakes = snowEnabledDisplayed ? renderSnowflakes(snowStormDisplayed, snowAmount, snowGustDirection) : null;
+  const leaves = leavesEnabledDisplayed ? renderLeaves(leavesStormDisplayed, leavesAmount) : null;
+  // Same *EnabledDisplayed-gated, computed-once-per-render idea as
+  // raindrops/snowflakes/leaves above -- bats/pumpkins are each split
+  // into their own back/front halves (see renderBats/renderPumpkins),
+  // cats are a flat front-only array (see renderCats). Only computed at
+  // all once the master Halloween layer is actually mounted; the
+  // individual batsEnabled/pumpkinsEnabled/catsEnabled sub-toggles are
+  // read at the JSX call sites below, not here, so switching one off
+  // and back on doesn't need to recompute the others.
+  const bats = halloweenEnabledDisplayed ? renderBats(batsAmount) : null;
+  const pumpkins = halloweenEnabledDisplayed ? renderPumpkins(pumpkinsAmount) : null;
+  const cats = halloweenEnabledDisplayed ? renderCats(catsAmount) : null;
+  const ghosts = halloweenEnabledDisplayed ? renderGhosts(ghostsAmount) : null;
+  // Same *EnabledDisplayed-gated idea as Halloween's own pieces just
+  // above -- mistletoe/ornaments/gingerbread/stars are back/front-split
+  // populations (like renderPumpkins). Santa is NOT computed here -- see
+  // renderSantaSleigh's own comment: it's a single persistent element a
+  // CSS @keyframes loop animates, not a per-render array.
+  const mistletoe = christmasEnabledDisplayed ? renderMistletoe(mistletoeAmount) : null;
+  const ornaments = christmasEnabledDisplayed ? renderOrnaments(ornamentsAmount) : null;
+  const gingerbread = christmasEnabledDisplayed ? renderGingerbread(gingerbreadAmount) : null;
+  const stars = christmasEnabledDisplayed ? renderStars(starsAmount) : null;
   return (
-    <div className="widget-root">
+    // display:contents so these weather layers become (visually and for
+    // CSS positioning purposes) direct children of Übersicht's own
+    // outer widget container instead of nested inside .widget-root --
+    // .widget-root itself sits INSIDE that outer container's own
+    // padding/border (see `export const className` above: padding,
+    // border, border-radius, box-shadow are all set there, not on
+    // .widget-root), so weather layers positioned relative to
+    // .widget-root only ever covered the inner content area, not the
+    // padding/border/shadow gutter around it -- i.e. "just the box
+    // inside the widget", not the whole widget. A display:contents
+    // wrapper doesn't establish a containing block of its own, so these
+    // still-position:absolute;inset:0 layers resolve against the real
+    // outer container instead, covering the complete widget. .widget-root
+    // itself is untouched (still position:relative, still holds all the
+    // real content) -- only the weather layers moved out from being ITS
+    // children to being its siblings.
+    <div style={{ display: "contents" }}>
+      {/* Snow, rain, and leaves each split into a back half (rendered
+          HERE, behind .widget-root) and a front half (rendered AFTER
+          .widget-root's own closing tag below) -- see backFlakes/
+          frontFlakes in renderSnowflakes, backDrops/frontDrops in
+          renderRaindrops, backLeaves/frontLeaves in renderLeaves. */}
+      {snowEnabledDisplayed && (
+        <div className="snow-layer-back">
+          {snowflakes.back}
+        </div>
+      )}
+      {leavesEnabledDisplayed && (
+        <div className="leaves-layer-back">
+          {leaves.back}
+        </div>
+      )}
+      {/* Halloween's own back half -- bats/ghosts flying behind the
+          content and pumpkins/jack-o-lanterns falling behind it, same
+          depth-split idea as snow/rain/leaves above (see
+          renderBats/renderGhosts/renderPumpkins). Cats are front-only
+          (see renderCats) -- there's no back half to render here for
+          them. */}
+      {halloweenEnabledDisplayed && (
+        <div className="halloween-layer-back">
+          {batsEnabled && bats.back}
+          {ghostsEnabled && ghosts.back}
+          {pumpkinsEnabled && pumpkins.back}
+        </div>
+      )}
+      {/* Christmas's own back half -- mistletoe/ornaments/gingerbread/
+          stars completing their own back/front split (see
+          renderMistletoe/renderOrnaments/renderGingerbread/renderStars),
+          same depth-split idea as Halloween above. The lights and Santa
+          are front-only -- see their own comments where they render
+          below. */}
+      {christmasEnabledDisplayed && (
+        <div className="christmas-layer-back">
+          {mistletoeEnabled && mistletoe.back}
+          {ornamentsEnabled && ornaments.back}
+          {gingerbreadEnabled && gingerbread.back}
+          {starsEnabled && stars.back}
+        </div>
+      )}
+      {/* Half of rain's own drops (backDrops, see renderRaindrops) render
+          HERE, behind .widget-root, same spot snow/leaves are --
+          so some of the rain visibly passes BEHIND tiles/posters, same
+          as it would pass behind any real object it's falling past. The
+          other half (frontDrops, plus every splash/bounce) renders AFTER
+          .widget-root instead -- see the comment right after .widget-
+          root's own closing tag below -- so rain reads as having actual
+          depth instead of sitting uniformly on one side of the content
+          or the other. */}
+      {rainEnabledDisplayed && (
+        <div className="rain-layer-back">
+          {raindrops.back}
+        </div>
+      )}
+      {/* Lightning stays behind .widget-root, unlike rain-layer-front/
+          snow-layer-front/leaves-layer-front above it in this same spot
+          -- a flash crossing in front of Now Playing tiles and Recently
+          Added posters read as covering up real content, not as weather.
+          It used to render AFTER .widget-root (grouped with rain-layer-
+          front, back when rain/lightning moved there together); moved
+          back here specifically per request, everything else in the
+          front/back split is unaffected. Gated on rainStormDisplayed
+          (what's actually currently drawn, see its own comment) rather
+          than the raw rainStorm target, so lightning only ever exists in
+          the DOM once rain's own storm fade-in has actually swapped over
+          to the storm piece set -- same "fades with the rest of it,
+          doesn't snap" reasoning as everything else in this crossfade. */}
+      {rainEnabled && rainStormDisplayed && (
+        <div className="lightning-layer">
+          <div className="lightning-glow" />
+          {renderLightningBolt()}
+        </div>
+      )}
+      <div
+        className={`widget-root${(weatherMenuOpen || streamsPopoutOpen) ? " widget-root-elevated" : ""}`}
+        onClick={() => {
+          if (streamsPopoutOpen && !streamsPopoutBehind) {
+            dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_BEHIND", value: true });
+          }
+          // Click-away close for the Weather dropdown -- the panel and its
+          // own button both stopPropagation, so this only ever fires for a
+          // click somewhere else on the widget.
+          if (weatherMenuOpen) {
+            dispatchRef && dispatchRef({ type: "SET_WEATHER_MENU_OPEN", value: false });
+          }
+        }}
+      >
+      {!dashboardHidden && (
+      <div className="dashboard-content">
       <div className="row">
         <span className="title">
           {avatarUrl && (
             <img className={`avatar${isOnline ? " avatar-online" : ""}`} src={avatarUrl} onError={hideOnError} onClick={() => openExternal(plexServerWebUrl())} />
           )}
           <span className={`dot ${isOnline ? "online" : "offline"}`} />
-          {isOnline ? <span className="server-title">{SERVER_DISPLAY_NAME || serverName}</span> : plexServerIssue === "not_owned" ? "No server found — this account doesn't own a Plex server" : "Plex Offline"}
+          {isOnline ? (
+            editingServerTitle ? (
+              <input
+                type="text"
+                className="server-title-input"
+                defaultValue={customServerTitle || SERVER_DISPLAY_NAME || serverName || ""}
+                autoFocus
+                onClick={(e) => e.stopPropagation()}
+                onBlur={(e) => {
+                  const v = e.target.value.trim();
+                  persistCustomServerTitle(v);
+                  dispatchRef && dispatchRef({ type: "SET_CUSTOM_SERVER_TITLE", value: v || null });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.target.blur();
+                  if (e.key === "Escape") dispatchRef && dispatchRef({ type: "CANCEL_EDIT_SERVER_TITLE" });
+                }}
+              />
+            ) : (
+              <span className="server-title-wrap">
+                <span className="server-title">{customServerTitle || SERVER_DISPLAY_NAME || serverName}</span>
+                <span
+                  className="server-title-edit-icon"
+                  onClick={(e) => { e.stopPropagation(); dispatchRef && dispatchRef({ type: "START_EDIT_SERVER_TITLE" }); }}
+                  title="Rename (cosmetic only — doesn't touch your real Plex server)"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 20h9" />
+                    <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                  </svg>
+                </span>
+                {customServerTitle && (
+                  <span
+                    className="server-title-reset-icon"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      persistCustomServerTitle(null);
+                      dispatchRef && dispatchRef({ type: "SET_CUSTOM_SERVER_TITLE", value: null });
+                    }}
+                    title="Revert to actual server name"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 12a9 9 0 1 0 3-6.7" />
+                      <path d="M3 4v5h5" />
+                    </svg>
+                  </span>
+                )}
+              </span>
+            )
+          ) : plexServerIssue === "not_owned" ? "No server found — this account doesn't own a Plex server" : "Plex Offline"}
         </span>
         <span className="header-streaming-info muted">{userCount} streaming{pausedCount > 0 ? ` · ${pausedCount} paused` : ""}{totalSpeedLabel ? ` · ${totalSpeedLabel}` : ""}</span>
         <span className="row-right">
-          <span
-            className="header-logo-icon"
-            onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_ABOUT" })}
-            title="About StreamPulse"
-          >
-            <img className="streampulse-logo-text" src={isOnline ? STREAMPULSE_LOGO : STREAMPULSE_LOGO_OFFLINE} alt="" />
-            <svg className="heartbeat-svg" viewBox="0 0 320 100" preserveAspectRatio="xMidYMid meet">
-              {isOnline && <path className="heartbeat-trace" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
-              {isOnline && <path className="heartbeat-pulse" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
-              {!isOnline && <path className="heartbeat-flatline-trace" d="M0,50 L320,50" />}
-              {!isOnline && <path className="heartbeat-flatline-pulse" d="M0,50 L320,50" />}
-            </svg>
-          </span>
+          {!logoHidden && (
+            <span
+              className="header-logo-icon"
+              onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_ABOUT" })}
+              title="About StreamPulse"
+            >
+              <img className="streampulse-logo-text" src={isOnline ? STREAMPULSE_LOGO : STREAMPULSE_LOGO_OFFLINE} alt="" />
+              <svg className="heartbeat-svg" viewBox="0 0 320 100" preserveAspectRatio="xMidYMid meet">
+                {isOnline && <path className="heartbeat-trace" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                {isOnline && <path className="heartbeat-pulse" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                {!isOnline && <path className="heartbeat-flatline-trace" d="M0,50 L320,50" />}
+                {!isOnline && <path className="heartbeat-flatline-pulse" d="M0,50 L320,50" />}
+              </svg>
+            </span>
+          )}
         </span>
       </div>
 
@@ -3843,7 +10085,17 @@ export const render = ({
       </div>
 
       <div className="section-now-playing" style={{ order: sectionOrder.indexOf("nowPlaying"), display: hiddenSections.includes("nowPlaying") ? "none" : undefined }}>
-      {renderSectionHeader(sectionOrder, "nowPlaying", "Now Playing", nowPlayingCollapsed, "TOGGLE_NOW_PLAYING", hiddenSections)}
+      {renderSectionHeader(sectionOrder, "nowPlaying", "Now Playing", nowPlayingCollapsed, "TOGGLE_NOW_PLAYING", hiddenSections,
+        <span
+          className="popout-trigger-btn"
+          onClick={(e) => { e.stopPropagation(); dispatchRef && dispatchRef({ type: "TOGGLE_STREAMS_POPOUT" }); }}
+          title="Pop out streams"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4" />
+          </svg>
+        </span>
+      )}
       {!nowPlayingCollapsed && (
       <div
         className="now-playing-scroll"
@@ -3863,138 +10115,7 @@ export const render = ({
           <span className="muted">Nothing is playing right now...</span>
         </div>
       ) : (
-      sessions.map((s, i) => {
-        const pct = s.duration ? Math.min(100, Math.max(0, (s.viewOffset / s.duration) * 100)) : 0;
-        const remainingMs = s.duration != null && s.viewOffset != null ? Math.max(0, s.duration - s.viewOffset) : null;
-        const poster = posterUrl(s);
-        const webUrl = itemWebUrl(machineIdentifier, s);
-        const info = getStreamInfo(s);
-        const playback = getPlaybackFormatInfo(s);
-        const sessionId = s.Session && s.Session.id;
-        const isConfirming = confirmingSessionId === sessionId;
-        const isPaused = s.Player && s.Player.state === "paused";
-        const pausedSinceMs = isPaused && sessionId && pausedAt[sessionId] ? Date.now() - pausedAt[sessionId] : null;
-        const rowClass = `media-row ${isPaused ? "row-paused" : "active-glow"}`;
-        const rowArtUrl = sessionArtUrl(s);
-        const avatarUrl = userAvatarUrl(s);
-        const username = (s.User && s.User.title) || "Unknown";
-        const ip = (s.Player && (s.Player.remotePublicAddress || s.Player.address)) || null;
-        const isMultiStream = (sessionCountByUser[username] || 0) >= 2;
-        const addedLabel = formatAddedDate(s.addedAt);
-        return (
-          <div key={i} className={rowClass}>
-            {rowArtUrl && <div className="row-backdrop-art" style={{ backgroundImage: `url(${rowArtUrl})` }} />}
-            {avatarUrl && (
-              <img className="user-avatar" src={avatarUrl} onError={hideOnError} title={username} />
-            )}
-            <div className="media-row-content">
-            {poster && (
-              <img className="poster-large" src={poster} onError={hideOnError} onClick={() => openExternal(webUrl)} />
-            )}
-            <div className="media-body">
-              <div className="item">
-                <span className="item-title">{displayTitleForSession(s)}</span>
-                <span className="item-right">
-                  {isMultiStream && (
-                    <span className="multi-stream-alert" title={`${username} has ${sessionCountByUser[username]} streams playing at once`}>⚠️</span>
-                  )}
-                </span>
-              </div>
-              {s.type === "episode" && s.parentIndex != null && s.index != null && (
-                <div className="muted">
-                  Season {s.parentIndex}, Episode {s.index}
-                  {s.originallyAvailableAt && ` (Aired on ${formatAiredDate(s.originallyAvailableAt)})`}
-                </div>
-              )}
-              {s.type === "movie" && (
-                <div className="muted">
-                  Directed by: {s.Director && s.Director.length > 0 ? s.Director.map((d) => d.tag).join(", ") : "Unknown"}
-                  {s.originallyAvailableAt && ` (Premiered on ${formatAiredDate(s.originallyAvailableAt)})`}
-                </div>
-              )}
-              <div className="muted status-line">
-                <strong className="user-name">{username}</strong> · <span className={`state-${((s.Player && s.Player.state) || "").toLowerCase()}`}>{(s.Player && s.Player.state) || "?"}</span>
-                {pausedSinceMs != null && (
-                  <span className={`pause-timer${pausedSinceMs > 3600000 ? " pause-timer-flash" : ""}`}>
-                    {` (${formatTime(pausedSinceMs)})`}
-                  </span>
-                )}
-              </div>
-              <div className="muted">
-                {(s.Player && s.Player.title) || "Unknown device"} ·{" "}
-                {ip ? (
-                  isMultiStream ? (
-                    <span className="ip-alert" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Multiple concurrent streams — click to look up this IP">
-                      {ip}
-                    </span>
-                  ) : (
-                    <span className="ip-link" onClick={() => openExternal(`https://ipinfo.io/${ip}`)} title="Click to look up this IP">
-                      {ip}
-                    </span>
-                  )
-                ) : (
-                  "IP unknown"
-                )}
-              </div>
-              <div className="muted">{formatTime(remainingMs)} left · {formatTime(s.duration)} total · ends {formatEndClock(remainingMs) || "--:--"}</div>
-              <div className="stream-meta-row">
-                <span>
-                  <span className={`badge ${info.badgeClass}`}>
-                    {info.decisionLabel}
-                  </span>
-                  {playback.resolution && (
-                    <span className={`muted stream-format${playback.resolution.downgraded ? " stream-format-downgraded" : ""}`}>
-                      · {playback.resolution.label}
-                    </span>
-                  )}
-                  {playback.audio && (
-                    <span className={`muted stream-format${playback.audio.downgraded ? " stream-format-downgraded" : ""}`}>
-                      · {playback.audio.label}
-                    </span>
-                  )}
-                  {info.hwLabel && <span className="badge badge-hw">{info.hwLabel}</span>}
-                  <span className="muted">{info.speedLabel || "—"}</span>
-                </span>
-                <span className="stream-meta-right">
-                  {addedLabel && (
-                    <span className="added-date-label" title={`Added to library on ${addedLabel}`}>
-                      Added on {addedLabel}
-                    </span>
-                  )}
-                  {isConfirming ? (
-                    <span className="stop-confirm-group">
-                      <button
-                        className="stop-btn stop-btn-yes"
-                        onClick={() => stopSession(sessionId, displayTitleForSession(s))}
-                      >
-                        Yes
-                      </button>
-                      <button
-                        className="stop-btn stop-btn-no"
-                        onClick={() => dispatchRef && dispatchRef({ type: "CONFIRM_STOP", sessionId: null })}
-                      >
-                        No
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      className="stop-btn"
-                      onClick={() => dispatchRef && dispatchRef({ type: "CONFIRM_STOP", sessionId })}
-                    >
-                      Stop
-                    </button>
-                  )}
-                </span>
-              </div>
-              <div className="bar-track">
-                <div className="bar-fill" style={{ width: `${pct}%` }} />
-                {!isPaused && <div className="bar-buffer" style={{ width: `${Math.min(100 - pct, 12)}%` }} />}
-              </div>
-            </div>
-            </div>
-          </div>
-        );
-      })
+      sessionsForDisplay.map((s, i) => renderStreamTile(s, i, { machineIdentifier, confirmingSessionId, pausedAt, sessionCountByUser, topUser, confettiEnabled }))
       )}
       </div>
       </div>
@@ -4103,7 +10224,10 @@ export const render = ({
                   )}
                 </div>
                 {section.items.length === 0 && <div className="muted">Nothing yet</div>}
-                <div className="recent-row-viewport">
+                <div
+                  className="recent-row-viewport"
+                  onWheel={section.items.length > 4 ? (e) => onRecentRowWheel(e, section.key, posterOffset, section.items.length) : undefined}
+                >
                 <div className="recent-row" style={{ transform: `translateX(-${posterOffset * 56}px)` }}>
                   {section.items.map((r) => {
                     const poster = posterUrl(r);
@@ -4113,17 +10237,25 @@ export const render = ({
                     // this is correct for grouped tiles too.
                     const isNew = r.addedAt && Date.now() - r.addedAt * 1000 < 24 * 60 * 60 * 1000;
                     const itemKey = r.ratingKey || (r.key ? r.key : `${section.key}-${r.addedAt}-${displayTitleForRecent(r)}`);
+                    // Music's recently-added items are albums (or bare
+                    // tracks) -- their cover art is square to begin with, so
+                    // stretching it into the same tall 2:3 movie-poster box
+                    // as everything else just crops/pads it oddly. Square it
+                    // off instead, same as a CD or vinyl sleeve.
+                    const isMusicItem = r.type === "album" || r.type === "track";
+                    const fullTitle = displayTitleForRecent(r);
                     return (
                       <div key={itemKey} className="recent-item">
                         {poster && (
                           <img
-                            className={`recent-poster${isNew ? " recent-poster-new" : ""}`}
+                            className={`recent-poster${isNew ? " recent-poster-new" : ""}${isMusicItem ? " recent-poster-music" : ""}`}
                             src={poster}
                             onError={hideOnError}
                             onClick={() => openExternal(webUrl)}
+                            title={fullTitle}
                           />
                         )}
-                        <div className="recent-title">{displayTitleForRecent(r)}</div>
+                        <div className="recent-title" title={fullTitle}>{fullTitle}</div>
                       </div>
                     );
                   })}
@@ -4149,6 +10281,16 @@ export const render = ({
           </span>
           <span className="count-pill">
             Top User: <span className="count-value">{topUser ? topUser : "—"}</span>
+          </span>
+          <span
+            className="bg-image-btn counts-row-confetti-btn"
+            onClick={() => {
+              run(`echo "${!confettiEnabled}" > ${CONFETTI_ENABLED_FILE}`).catch(() => {});
+              dispatchRef && dispatchRef({ type: "TOGGLE_CONFETTI" });
+            }}
+            title={confettiEnabled ? "Stop the confetti on today's top streamer's tile" : "Rain confetti on today's top streamer's tile"}
+          >
+            {confettiEnabled ? "🎉 Confetti On" : "🎉 Confetti Off"}
           </span>
         </div>
       )}
@@ -4205,6 +10347,55 @@ export const render = ({
       {lastVisibleSectionKey !== "system" && <div className="section-divider" />}
       </div>
 
+      {isSonarrConfigured() && (
+      <div style={{ order: sectionOrder.indexOf("sonarr") === -1 ? sectionOrder.length : sectionOrder.indexOf("sonarr"), display: hiddenSections.includes("sonarr") ? "none" : undefined }}>
+      {renderSectionHeader(sectionOrder, "sonarr", "Sonarr", sonarrCollapsed, "TOGGLE_SONARR", hiddenSections)}
+      {!sonarrCollapsed && (
+        <div>
+          {sonarrHealth.length > 0 && (
+            <div className="sonarr-health">
+              {sonarrHealth.slice(0, 2).map((h, i) => (
+                <div key={i} className={`sonarr-health-item ${h.type}`}>{h.message}</div>
+              ))}
+            </div>
+          )}
+          <div className="counts-row">
+            <span className="count-pill">Missing: {sonarrMissingCount != null ? sonarrMissingCount : "\u2014"}</span>
+            <span className="count-pill">{formatDiskSpace(sonarrDiskFree)}</span>
+          </div>
+          {sonarrQueue.length > 0 && (
+            <div>
+              <div className="sub-label">Downloading</div>
+              {sonarrQueue.map((item) => (
+                <div key={item.id} className="sonarr-queue-item">
+                  <div className="sonarr-queue-title">{item.title}</div>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${item.pct}%` }} />
+                  </div>
+                  <div className="sonarr-queue-meta">{item.timeleft || item.status || ""}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {sonarrUpcoming.length > 0 && (
+            <div>
+              <div className="sub-label">Coming Up</div>
+              {sonarrUpcoming.map((ep, i) => (
+                <div key={i} className="sonarr-upcoming-item">
+                  {ep.title} {ep.seasonEp} \u2014 {new Date(ep.airDateUtc).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </div>
+              ))}
+            </div>
+          )}
+          {sonarrQueue.length === 0 && sonarrUpcoming.length === 0 && !sonarrMissingCount && (
+            <div className="sonarr-empty">All caught up.</div>
+          )}
+        </div>
+      )}
+      {lastVisibleSectionKey !== "sonarr" && <div className="section-divider" />}
+      </div>
+      )}
+
       <div className="widget-controls" style={{ order: 999 }}>
       <div className="footer-controls-grid">
         <div className="hidden-sections-group">
@@ -4252,7 +10443,7 @@ export const render = ({
         <span className={`bottom-error-message${actionMessage ? " visible" : ""}`}>{actionMessage || ""}</span>
         <div className="bg-color-group">
           <span className="bg-color-label">Background:</span>
-          <div className="bg-color-swatches">
+          <div className={`bg-color-swatches${weatherMenuOpen ? " bg-color-swatches-force-visible" : ""}`}>
             {BG_COLOR_PRESETS.map((c) => (
               <span
                 key={c.rgb}
@@ -4260,6 +10451,587 @@ export const render = ({
                 style={{ backgroundColor: `rgb(${c.rgb})` }}
                 title={c.label}
                 onClick={(e) => onBgColorSwatchClick(e, c.rgb)}
+              />
+            ))}
+            <span className="bg-image-btn" onClick={onPickBgImageClick} title="Use a photo as the background">
+              {currentBgImage() ? "Change Photo" : "Add Photo"}
+            </span>
+            {currentBgImage() && (
+              <span
+                className="bg-image-btn"
+                onClick={onToggleBgImageLockClick}
+                title={currentBgImageLocked() ? "Locked: the photo always shows, transparency only dims it. Click to unlock." : "Unlocked: transparency fades the photo too, like the rest of the widget. Click to lock it always-visible."}
+              >
+                {currentBgImageLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+              </span>
+            )}
+            {currentBgImage() && (
+              <span className="bg-image-btn bg-image-remove-btn" onClick={onClearBgImageClick} title="Remove the background photo">
+                ✕
+              </span>
+            )}
+            <span
+              className="bg-image-btn"
+              onClick={() => {
+                run(`echo "${!logoHidden}" > ${LOGO_HIDDEN_FILE}`).catch(() => {});
+                dispatchRef && dispatchRef({ type: "TOGGLE_LOGO" });
+              }}
+              title={logoHidden ? "Show the StreamPulse logo" : "Hide the StreamPulse logo"}
+            >
+              {logoHidden ? "Show Logo" : "Hide Logo"}
+            </span>
+            <span className="weather-btn-wrap" style={{ position: "relative" }}>
+              <span
+                className="bg-image-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dispatchRef && dispatchRef({ type: "SET_WEATHER_MENU_OPEN", value: !weatherMenuOpen });
+                }}
+                title="Background weather effects"
+              >
+                🌦️ Weather
+              </span>
+              {weatherMenuOpen && (
+                <div className="weather-menu" onClick={(e) => e.stopPropagation()}>
+                  <div className="weather-menu-item">
+                    <span
+                      className="bg-image-btn"
+                      onClick={() => {
+                        run(`echo "${!snowEnabled}" > ${SNOW_ENABLED_FILE}`).catch(() => {});
+                        if (snowEnabled) {
+                          // Turning OFF -- fade out over WEATHER_ENABLED_FADE_MS,
+                          // see triggerWeatherEnabledFadeOut's own comment.
+                          triggerWeatherEnabledFadeOut("--snow-enabled-fade", "--snow-fade-duration", "TOGGLE_SNOW", "SNOW_ENABLED_SWAP");
+                        } else {
+                          // Turning ON -- unchanged, immediate.
+                          dispatchRef && dispatchRef({ type: "TOGGLE_SNOW" });
+                        }
+                      }}
+                      title={snowEnabled ? "Stop the background snow" : "Drift snow in the background"}
+                    >
+                      {snowEnabled ? "❄️ Snow On" : "❄️ Snow Off"}
+                    </span>
+                    {snowEnabled && (
+                      <div style={{ display: "contents" }}>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!snowStorm}" > ${SNOW_STORM_FILE}`).catch(() => {});
+                              triggerWeatherStormFade("--snow-storm-fade", "TOGGLE_SNOW_STORM", "SNOW_STORM_SWAP");
+                            }}
+                            title={snowStorm ? "Storm: heavier snow and strong wind. Click for just a little wind instead." : "A little wind: gentle snowfall with a slight drift. Click for a full storm instead."}
+                          >
+                            {snowStorm ? "🌬️ Storm" : "🍃 Light Wind"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={onToggleSnowLockClick}
+                            title={currentSnowLocked() ? "Locked: snow always shows, transparency doesn't fade it. Click to unlock." : "Unlocked: snow fades with the background transparency slider, like the rest of the widget. Click to lock it always-visible."}
+                          >
+                            {currentSnowLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                          </span>
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{snowAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={snowAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${SNOW_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_SNOW_AMOUNT", value: v });
+                            }}
+                            title="How much snow falls"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="weather-menu-item">
+                    <span
+                      className="bg-image-btn"
+                      onClick={() => {
+                        run(`echo "${!rainEnabled}" > ${RAIN_ENABLED_FILE}`).catch(() => {});
+                        if (rainEnabled) {
+                          // Turning OFF -- fade out over WEATHER_ENABLED_FADE_MS,
+                          // see triggerWeatherEnabledFadeOut's own comment.
+                          triggerWeatherEnabledFadeOut("--rain-enabled-fade", "--rain-fade-duration", "TOGGLE_RAIN", "RAIN_ENABLED_SWAP");
+                        } else {
+                          // Turning ON -- unchanged, immediate.
+                          dispatchRef && dispatchRef({ type: "TOGGLE_RAIN" });
+                        }
+                      }}
+                      title={rainEnabled ? "Stop the background rain" : "Rain in the background"}
+                    >
+                      {rainEnabled ? "🌧️ Rain On" : "🌧️ Rain Off"}
+                    </span>
+                    {rainEnabled && (
+                      <div style={{ display: "contents" }}>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!rainStorm}" > ${RAIN_STORM_FILE}`).catch(() => {});
+                              triggerWeatherStormFade("--rain-storm-fade", "TOGGLE_RAIN_STORM", "RAIN_STORM_SWAP");
+                            }}
+                            title={rainStorm ? "Storm: heavier rain, hard wind, and lightning. Click for steady rain instead." : "Steady rain: no wind lash or lightning. Click for a full storm instead."}
+                          >
+                            {rainStorm ? "⛈️ Storm" : "🌧️ Steady Rain"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={onToggleRainLockClick}
+                            title={currentRainLocked() ? "Locked: rain always shows, transparency doesn't fade it. Click to unlock." : "Unlocked: rain fades with the background transparency slider, like the rest of the widget. Click to lock it always-visible."}
+                          >
+                            {currentRainLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                          </span>
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{rainAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={rainAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${RAIN_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_RAIN_AMOUNT", value: v });
+                            }}
+                            title="How much rain falls"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="weather-menu-item">
+                    <span
+                      className="bg-image-btn"
+                      onClick={() => {
+                        run(`echo "${!leavesEnabled}" > ${LEAVES_ENABLED_FILE}`).catch(() => {});
+                        if (leavesEnabled) {
+                          // Turning OFF -- fade out over WEATHER_ENABLED_FADE_MS,
+                          // see triggerWeatherEnabledFadeOut's own comment.
+                          triggerWeatherEnabledFadeOut("--leaves-enabled-fade", "--leaves-fade-duration", "TOGGLE_LEAVES", "LEAVES_ENABLED_SWAP");
+                        } else {
+                          // Turning ON -- unchanged, immediate.
+                          dispatchRef && dispatchRef({ type: "TOGGLE_LEAVES" });
+                        }
+                      }}
+                      title={leavesEnabled ? "Stop the background falling leaves" : "Drift falling leaves in the background"}
+                    >
+                      {leavesEnabled ? "🍂 Leaves On" : "🍂 Leaves Off"}
+                    </span>
+                    {leavesEnabled && (
+                      <div style={{ display: "contents" }}>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!leavesStorm}" > ${LEAVES_STORM_FILE}`).catch(() => {});
+                              triggerWeatherStormFade("--leaves-storm-fade", "TOGGLE_LEAVES_STORM", "LEAVES_STORM_SWAP");
+                            }}
+                            title={leavesStorm ? "Windstorm: more leaves, thrown around much harder. Click for a gentle drift instead." : "Gentle drift: a light, steady fall. Click for a full windstorm instead."}
+                          >
+                            {leavesStorm ? "🌪️ Storm" : "🍂 Drifting"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={onToggleLeavesLockClick}
+                            title={currentLeavesLocked() ? "Locked: leaves always show, transparency doesn't fade them. Click to unlock." : "Unlocked: leaves fade with the background transparency slider, like the rest of the widget. Click to lock them always-visible."}
+                          >
+                            {currentLeavesLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                          </span>
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{leavesAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={leavesAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${LEAVES_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_LEAVES_AMOUNT", value: v });
+                            }}
+                            title="How many leaves fall"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="weather-menu-item">
+                    <span
+                      className="bg-image-btn"
+                      onClick={() => {
+                        run(`echo "${!halloweenEnabled}" > ${HALLOWEEN_ENABLED_FILE}`).catch(() => {});
+                        if (halloweenEnabled) {
+                          // Turning OFF -- fade out over WEATHER_ENABLED_FADE_MS,
+                          // see triggerWeatherEnabledFadeOut's own comment.
+                          triggerWeatherEnabledFadeOut("--halloween-enabled-fade", "--halloween-fade-duration", "TOGGLE_HALLOWEEN", "HALLOWEEN_ENABLED_SWAP");
+                        } else {
+                          // Turning ON -- unchanged, immediate.
+                          dispatchRef && dispatchRef({ type: "TOGGLE_HALLOWEEN" });
+                        }
+                      }}
+                      title={halloweenEnabled ? "Stop bats, ghosts, pumpkins, and cats" : "Bats, floating ghosts, falling pumpkins/jack-o-lanterns, and prowling cats"}
+                    >
+                      {halloweenEnabled ? "🎃 Halloween On" : "🎃 Halloween Off"}
+                    </span>
+                    {halloweenEnabled && (
+                      <div style={{ display: "contents" }}>
+                        {/* Bats, ghosts, and pumpkins/jack-o-lanterns are each
+                            optional on their own once Halloween itself is on --
+                            simple immediate flips, no fade/lag of their own (see
+                            TOGGLE_BATS/TOGGLE_GHOSTS/TOGGLE_PUMPKINS), since the
+                            master toggle above already fades the whole layer. */}
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!batsEnabled}" > ${BATS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_BATS" });
+                            }}
+                            title={batsEnabled ? "Stop the flying bats" : "Fly bats (different sizes) around the widget"}
+                          >
+                            {batsEnabled ? "🦇 Bats On" : "🦇 Bats Off"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!ghostsEnabled}" > ${GHOSTS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_GHOSTS" });
+                            }}
+                            title={ghostsEnabled ? "Stop the floating ghosts" : "Float ghosts (different sizes) around the widget"}
+                          >
+                            {ghostsEnabled ? "👻 Ghosts On" : "👻 Ghosts Off"}
+                          </span>
+                        </div>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!pumpkinsEnabled}" > ${PUMPKINS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_PUMPKINS" });
+                            }}
+                            title={pumpkinsEnabled ? "Stop the falling pumpkins" : "Drop falling pumpkins and jack-o-lanterns"}
+                          >
+                            {pumpkinsEnabled ? "🎃 Pumpkins On" : "🎃 Pumpkins Off"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!catsEnabled}" > ${CATS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_CATS" });
+                            }}
+                            title={catsEnabled ? "Stop the black cats" : "Walk black cats along the stream tiles and the floor"}
+                          >
+                            {catsEnabled ? "🐈‍⬛ Cats On" : "🐈‍⬛ Cats Off"}
+                          </span>
+                        </div>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={onToggleHalloweenLockClick}
+                            title={currentHalloweenLocked() ? "Locked: Halloween always shows, transparency doesn't fade it. Click to unlock." : "Unlocked: Halloween fades with the background transparency slider, like the rest of the widget. Click to lock it always-visible."}
+                          >
+                            {currentHalloweenLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                          </span>
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{batsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={batsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${BATS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_BATS_AMOUNT", value: v });
+                            }}
+                            title="How many bats fly around"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{ghostsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={ghostsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${GHOSTS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_GHOSTS_AMOUNT", value: v });
+                            }}
+                            title="How many ghosts float around"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{pumpkinsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={pumpkinsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${PUMPKINS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_PUMPKINS_AMOUNT", value: v });
+                            }}
+                            title="How many pumpkins fall"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{catsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={catsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${CATS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_CATS_AMOUNT", value: v });
+                            }}
+                            title="How many extra cats join the two that always walk the top two Now Playing tiles -- scales how many of the current section dividers also get one"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="weather-menu-item">
+                    <span
+                      className="bg-image-btn"
+                      onClick={() => {
+                        run(`echo "${!christmasEnabled}" > ${CHRISTMAS_ENABLED_FILE}`).catch(() => {});
+                        if (christmasEnabled) {
+                          // Turning OFF -- fade out over WEATHER_ENABLED_FADE_MS,
+                          // see triggerWeatherEnabledFadeOut's own comment.
+                          triggerWeatherEnabledFadeOut("--christmas-enabled-fade", "--christmas-fade-duration", "TOGGLE_CHRISTMAS", "CHRISTMAS_ENABLED_SWAP");
+                        } else {
+                          // Turning ON -- unchanged, immediate.
+                          dispatchRef && dispatchRef({ type: "TOGGLE_CHRISTMAS" });
+                        }
+                      }}
+                      title={christmasEnabled ? "Stop Santa, mistletoe, ornaments, gingerbread, and stars" : "A flying Santa + reindeer, falling mistletoe, ornaments, gingerbread men, and glowing stars"}
+                    >
+                      {christmasEnabled ? "🎄 Christmas On" : "🎄 Christmas Off"}
+                    </span>
+                    {christmasEnabled && (
+                      <div style={{ display: "contents" }}>
+                        {/* Santa, mistletoe, ornaments, gingerbread, and
+                            stars are each optional on their own once
+                            Christmas itself is on -- simple immediate flips,
+                            no fade/lag of their own (see TOGGLE_SANTA/
+                            TOGGLE_MISTLETOE/TOGGLE_ORNAMENTS/
+                            TOGGLE_GINGERBREAD/TOGGLE_STARS above), since the
+                            master toggle above already fades the whole
+                            layer. */}
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!santaEnabled}" > ${SANTA_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_SANTA" });
+                            }}
+                            title={santaEnabled ? "Stop Santa's sleigh flying by" : "Fly Santa + reindeer across the widget every so often"}
+                          >
+                            {santaEnabled ? "🛷 Santa On" : "🛷 Santa Off"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!mistletoeEnabled}" > ${MISTLETOE_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_MISTLETOE" });
+                            }}
+                            title={mistletoeEnabled ? "Stop the falling mistletoe" : "Drop falling mistletoe sprigs"}
+                          >
+                            {mistletoeEnabled ? "🌿 Mistletoe On" : "🌿 Mistletoe Off"}
+                          </span>
+                        </div>
+                        {santaEnabled && (
+                          // Reuses the exact same .bg-color-group/.bg-color-swatches/
+                          // .bg-color-swatch classes as the Background/Accent rows
+                          // (see ACCENT_COLOR_PRESETS' own comment) -- just its own
+                          // preset list and imperative setter (setSantaColor/
+                          // --santa-rgb) instead of --plex-accent-rgb. Always
+                          // force-visible (not hover-gated) since it already only
+                          // shows up inside the already-open Christmas submenu.
+                          <div className="bg-color-group santa-color-group" style={{ paddingLeft: 4 }}>
+                            <span className="weather-amount-label">Santa:</span>
+                            <div className="bg-color-swatches bg-color-swatches-force-visible">
+                              {SANTA_COLOR_PRESETS.map((c) => (
+                                <span
+                                  key={c.rgb}
+                                  className={`bg-color-swatch${currentSantaColor() === c.rgb ? " bg-color-swatch-selected" : ""}`}
+                                  style={{ backgroundColor: `rgb(${c.rgb})` }}
+                                  title={c.label}
+                                  onClick={(e) => onSantaColorSwatchClick(e, c.rgb)}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!ornamentsEnabled}" > ${ORNAMENTS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_ORNAMENTS" });
+                            }}
+                            title={ornamentsEnabled ? "Stop the falling ornaments" : "Drop falling colored ornaments"}
+                          >
+                            {ornamentsEnabled ? "🔴 Ornaments On" : "🔴 Ornaments Off"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!gingerbreadEnabled}" > ${GINGERBREAD_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_GINGERBREAD" });
+                            }}
+                            title={gingerbreadEnabled ? "Stop the falling gingerbread men" : "Drop falling gingerbread men"}
+                          >
+                            {gingerbreadEnabled ? "🍪 Gingerbread On" : "🍪 Gingerbread Off"}
+                          </span>
+                        </div>
+                        <div className="weather-menu-subrow">
+                          <span
+                            className="bg-image-btn"
+                            onClick={() => {
+                              run(`echo "${!starsEnabled}" > ${STARS_ENABLED_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "TOGGLE_STARS" });
+                            }}
+                            title={starsEnabled ? "Stop the falling glowing stars" : "Drop falling glowing north stars"}
+                          >
+                            {starsEnabled ? "⭐ Stars On" : "⭐ Stars Off"}
+                          </span>
+                          <span
+                            className="bg-image-btn"
+                            onClick={onToggleChristmasLockClick}
+                            title={currentChristmasLocked() ? "Locked: Christmas always shows, transparency doesn't fade it. Click to unlock." : "Unlocked: Christmas fades with the background transparency slider, like the rest of the widget. Click to lock it always-visible."}
+                          >
+                            {currentChristmasLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                          </span>
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{mistletoeAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={mistletoeAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${MISTLETOE_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_MISTLETOE_AMOUNT", value: v });
+                            }}
+                            title="How much mistletoe falls"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{ornamentsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={ornamentsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${ORNAMENTS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_ORNAMENTS_AMOUNT", value: v });
+                            }}
+                            title="How many ornaments fall"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{gingerbreadAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={gingerbreadAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${GINGERBREAD_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_GINGERBREAD_AMOUNT", value: v });
+                            }}
+                            title="How many gingerbread men fall"
+                          />
+                        </div>
+                        <div className="weather-amount-row">
+                          <span className="weather-amount-label">{starsAmount}%</span>
+                          <input
+                            type="range"
+                            className="weather-amount-slider"
+                            min="0"
+                            max="100"
+                            step="5"
+                            value={starsAmount}
+                            onChange={(e) => {
+                              const v = Number(e.target.value);
+                              run(`echo "${v}" > ${STARS_AMOUNT_FILE}`).catch(() => {});
+                              dispatchRef && dispatchRef({ type: "SET_STARS_AMOUNT", value: v });
+                            }}
+                            title="How many glowing stars fall"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {/* Room for more weather effects here later -- each gets its
+                      own .weather-menu-item block, same shape as the five
+                      above. */}
+                </div>
+              )}
+            </span>
+          </div>
+        </div>
+        {/* Reuses the exact same .bg-color-group/.bg-color-swatches/
+            .bg-color-swatch classes as the Background row just above --
+            same look, just its own preset list (ACCENT_COLOR_PRESETS) and
+            its own imperative setter (setAccentColor/--plex-accent-rgb)
+            instead of --plex-bg-color-rgb. This is the color everywhere
+            the widget used to hardcode Plex orange: the Now Playing
+            progress bar and its buffer pulse, the section dividers, the
+            server name, the Activity section's own values, and the
+            avatar's online glow -- see ACCENT_COLOR_PRESETS' own comment
+            for the full list. "Default" is the original Plex orange. */}
+        <div className="bg-color-group accent-color-group">
+          <span className="bg-color-label">Accent:</span>
+          <div className={`bg-color-swatches${weatherMenuOpen ? " bg-color-swatches-force-visible" : ""}`}>
+            {ACCENT_COLOR_PRESETS.map((c) => (
+              <span
+                key={c.rgb}
+                className={`bg-color-swatch${currentAccentColor() === c.rgb ? " bg-color-swatch-selected" : ""}`}
+                style={{ backgroundColor: `rgb(${c.rgb})` }}
+                title={c.label}
+                onClick={(e) => onAccentColorSwatchClick(e, c.rgb)}
               />
             ))}
           </div>
@@ -4295,6 +11067,395 @@ export const render = ({
             </div>
             <span className="about-modal-close" onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_ABOUT" })}>Close</span>
           </div>
+        </div>
+      )}
+      </div>
+      )}
+      {streamsPopoutOpen && (
+        <div
+          className={`streams-popout-overlay${streamsPopoutFullscreen ? " streams-popout-fullscreen" : ""}${streamsPopoutBehind ? " streams-popout-behind" : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (streamsPopoutBehind) dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_BEHIND", value: false });
+          }}
+        >
+          <div className="streams-popout-body">
+          <div className="streams-popout-header">
+            <div className="streams-popout-header-left">
+              {!streamsPopoutFullscreen && (
+                <span className="popout-drag-handle" onMouseDown={startPopoutDrag} title="Drag to move">⠿</span>
+              )}
+              <span className="streams-popout-title">Now Playing</span>
+              <span className="streams-popout-count muted">
+                {streamsPopoutFiltered.length === sessions.length
+                  ? `${sessions.length} stream${sessions.length === 1 ? "" : "s"}`
+                  : `${streamsPopoutFiltered.length} of ${sessions.length} streams`}
+              </span>
+            </div>
+            <div className="streams-popout-controls">
+              <div className="streams-popout-theme-group">
+                <div className="bg-opacity-group">
+                  <span className="bg-opacity-label">Transparency:</span>
+                  <span className="bg-opacity-value">{Math.round((1 - currentPopoutBgOpacity()) * 100)}%</span>
+                  <input
+                    type="range"
+                    className="bg-opacity-slider"
+                    min="0"
+                    max="100"
+                    step="1"
+                    defaultValue={String(Math.round((1 - currentPopoutBgOpacity()) * 100))}
+                    onChange={onPopoutBgOpacitySliderChange}
+                    title="Pop-out background transparency"
+                  />
+                </div>
+                <div className="bg-color-group">
+                  <span className="bg-color-label">Background:</span>
+                  <div className="bg-color-swatches">
+                    {BG_COLOR_PRESETS.map((c) => (
+                      <span
+                        key={c.rgb}
+                        className={`bg-color-swatch${currentPopoutBgColor() === c.rgb ? " bg-color-swatch-selected" : ""}`}
+                        style={{ backgroundColor: `rgb(${c.rgb})` }}
+                        title={c.label}
+                        onClick={(e) => onPopoutBgColorSwatchClick(e, c.rgb)}
+                      />
+                    ))}
+                    <span className="bg-image-btn" onClick={onPickPopoutBgImageClick} title="Use a photo as the pop-out background">
+                      {currentPopoutBgImage() ? "Change Photo" : "Add Photo"}
+                    </span>
+                    {currentPopoutBgImage() && (
+                      <span
+                        className="bg-image-btn"
+                        onClick={onTogglePopoutBgImageLockClick}
+                        title={currentPopoutBgImageLocked() ? "Locked: the photo always shows, transparency only dims it. Click to unlock." : "Unlocked: transparency fades the photo too, like the rest of the pop-out. Click to lock it always-visible."}
+                      >
+                        {currentPopoutBgImageLocked() ? "🔒 Locked" : "🔓 Unlocked"}
+                      </span>
+                    )}
+                    {currentPopoutBgImage() && (
+                      <span className="bg-image-btn bg-image-remove-btn" onClick={onClearPopoutBgImageClick} title="Remove the pop-out background photo">
+                        ✕
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <span className="streams-popout-size-group">
+                {STREAMS_POPOUT_TILE_SIZES.map((sz) => (
+                  <span
+                    key={sz}
+                    className={`streams-popout-size-btn${streamsPopoutTileSize === sz ? " active" : ""}`}
+                    onClick={() => {
+                      persistStreamsPopoutTileSize(sz);
+                      dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_TILE_SIZE", size: sz });
+                    }}
+                  >
+                    {sz === "small" ? "S" : sz === "medium" ? "M" : "L"}
+                  </span>
+                ))}
+              </span>
+              <span className="streams-popout-columns-group">
+                <span className="streams-popout-sort-label">Cols:</span>
+                <select
+                  className="streams-popout-select"
+                  value={streamsPopoutColumns}
+                  onChange={(e) => {
+                    persistStreamsPopoutColumns(e.target.value);
+                    dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_COLUMNS", columns: e.target.value });
+                  }}
+                  title="How many tiles per row"
+                >
+                  {STREAMS_POPOUT_COLUMNS_OPTIONS.map((c) => (
+                    <option key={c} value={c}>{c === "auto" ? "Auto" : c}</option>
+                  ))}
+                </select>
+              </span>
+              <span className="streams-popout-columns-group">
+                <span className="streams-popout-sort-label">Rows:</span>
+                <select
+                  className="streams-popout-select"
+                  value={streamsPopoutRows}
+                  onChange={(e) => {
+                    persistStreamsPopoutRows(e.target.value);
+                    dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_ROWS", rows: e.target.value });
+                  }}
+                  title="How many rows to fit on screen at once"
+                >
+                  {STREAMS_POPOUT_ROWS_OPTIONS.map((r) => (
+                    <option key={r} value={r}>{r === "auto" ? "Auto" : r}</option>
+                  ))}
+                </select>
+              </span>
+              <span
+                className={`streams-popout-btn${dashboardHidden ? " streams-popout-restore-btn" : ""}`}
+                onClick={() => {
+                  if (dashboardHidden) {
+                    setDashboardHidden(false);
+                    dispatchRef && dispatchRef({ type: "RESTORE_DASHBOARD" });
+                  } else {
+                    setDashboardHidden(true);
+                    dispatchRef && dispatchRef({ type: "HIDE_DASHBOARD" });
+                  }
+                }}
+              >
+                {dashboardHidden ? "Restore Dashboard" : "Hide Dashboard"}
+              </span>
+              <span
+                className="streams-popout-btn"
+                onClick={() => {
+                  if (streamsPopoutFullscreen) {
+                    exitPopoutFullscreenDockAutohide();
+                  } else {
+                    enterPopoutFullscreenDockAutohide();
+                  }
+                  dispatchRef && dispatchRef({ type: "TOGGLE_STREAMS_POPOUT_FULLSCREEN" });
+                }}
+              >
+                {streamsPopoutFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </span>
+              <span
+                className="streams-popout-btn streams-popout-close"
+                onClick={() => {
+                  if (streamsPopoutFullscreen) exitPopoutFullscreenDockAutohide();
+                  dispatchRef && dispatchRef({ type: "TOGGLE_STREAMS_POPOUT" });
+                }}
+              >
+                Close
+              </span>
+              <span
+                className="streams-popout-header-logo"
+                onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_POPOUT_ABOUT" })}
+                title="About StreamPulse"
+              >
+                <img className="streampulse-logo-text" src={isOnline ? STREAMPULSE_LOGO : STREAMPULSE_LOGO_OFFLINE} alt="" />
+                <svg className="heartbeat-svg" viewBox="0 0 320 100" preserveAspectRatio="xMidYMid meet">
+                  {isOnline && <path className="heartbeat-trace" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                  {isOnline && <path className="heartbeat-pulse" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                  {!isOnline && <path className="heartbeat-flatline-trace" d="M0,50 L320,50" />}
+                  {!isOnline && <path className="heartbeat-flatline-pulse" d="M0,50 L320,50" />}
+                </svg>
+              </span>
+            </div>
+          </div>
+          {sessions.length > 0 && (
+          <div className="streams-popout-toolbar">
+            <input
+              type="text"
+              className="streams-popout-search"
+              placeholder="Search title, user, device…"
+              defaultValue={streamsPopoutSearch}
+              onChange={(e) => dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_SEARCH", value: e.target.value })}
+            />
+            <select
+              className="streams-popout-select"
+              value={streamsPopoutFilterUser}
+              onChange={(e) => dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_FILTER_USER", value: e.target.value })}
+              title="Filter by user"
+            >
+              <option value="all">All users</option>
+              {getStreamsPopoutUsers(sessions).map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </select>
+            <select
+              className="streams-popout-select"
+              value={streamsPopoutFilterState}
+              onChange={(e) => dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_FILTER_STATE", value: e.target.value })}
+              title="Filter by playback state"
+            >
+              <option value="all">Playing + Paused</option>
+              <option value="playing">Playing only</option>
+              <option value="paused">Paused only</option>
+            </select>
+            <select
+              className="streams-popout-select"
+              value={streamsPopoutFilterDecision}
+              onChange={(e) => dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_FILTER_DECISION", value: e.target.value })}
+              title="Filter by playback decision"
+            >
+              <option value="all">All playback types</option>
+              <option value="badge-direct">Direct Play</option>
+              <option value="badge-stream">Direct Stream</option>
+              <option value="badge-transcode">Transcoding</option>
+            </select>
+            {getStreamsPopoutTypes(sessions).length > 1 && (
+              <select
+                className="streams-popout-select"
+                value={streamsPopoutFilterType}
+                onChange={(e) => dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_FILTER_TYPE", value: e.target.value })}
+                title="Filter by media type"
+              >
+                <option value="all">All media types</option>
+                {getStreamsPopoutTypes(sessions).map((t) => (
+                  <option key={t} value={t}>{capitalizeWord(t)}</option>
+                ))}
+              </select>
+            )}
+            <span
+              className={`streams-popout-toggle-chip${streamsPopoutFilterMultiOnly ? " active" : ""}`}
+              onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_STREAMS_POPOUT_FILTER_MULTI_ONLY" })}
+              title="Only show users with more than one stream running"
+            >
+              ⚠️ Multi-stream only
+            </span>
+            {(streamsPopoutFilterUser !== "all" || streamsPopoutFilterState !== "all" || streamsPopoutFilterDecision !== "all" || streamsPopoutFilterType !== "all" || streamsPopoutFilterMultiOnly || streamsPopoutSearch) && (
+              <span
+                className="streams-popout-clear-btn"
+                onClick={() => dispatchRef && dispatchRef({ type: "CLEAR_STREAMS_POPOUT_FILTERS" })}
+              >
+                Clear filters
+              </span>
+            )}
+            <span className="streams-popout-sort-group">
+              <span className="streams-popout-sort-label">Sort:</span>
+              <select
+                className="streams-popout-select"
+                value={streamsPopoutSort}
+                onChange={(e) => {
+                  persistStreamsPopoutSort(e.target.value, streamsPopoutSortDir);
+                  dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_SORT", sort: e.target.value, dir: streamsPopoutSortDir });
+                }}
+                title="Sort by"
+              >
+                {STREAMS_POPOUT_SORTS.map((s) => (
+                  <option key={s} value={s}>{STREAMS_POPOUT_SORT_LABELS[s]}</option>
+                ))}
+              </select>
+              <span
+                className="streams-popout-sort-dir-btn"
+                onClick={() => {
+                  const nextDir = streamsPopoutSortDir === "asc" ? "desc" : "asc";
+                  persistStreamsPopoutSort(streamsPopoutSort, nextDir);
+                  dispatchRef && dispatchRef({ type: "SET_STREAMS_POPOUT_SORT", sort: streamsPopoutSort, dir: nextDir });
+                }}
+                title={streamsPopoutSortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+              >
+                {streamsPopoutSortDir === "asc" ? "▲" : "▼"}
+              </span>
+            </span>
+          </div>
+          )}
+          <div className="streams-popout-scroll">
+            {sessions.length === 0 ? (
+              <div className="streams-popout-empty muted">Nothing is playing right now...</div>
+            ) : streamsPopoutFiltered.length === 0 ? (
+              <div className="streams-popout-empty muted">No streams match these filters.</div>
+            ) : (
+              <div
+                className={`streams-popout-grid streams-popout-grid-${streamsPopoutTileSize}`}
+                style={{
+                  ...(streamsPopoutColumns !== "auto" ? { gridTemplateColumns: `repeat(${streamsPopoutColumns}, minmax(0, 1fr))` } : {}),
+                  ...(streamsPopoutRows !== "auto" ? { gridTemplateRows: `repeat(${streamsPopoutRows}, minmax(0, 1fr))`, height: "100%" } : {}),
+                }}
+              >
+                {streamsPopoutFiltered.map((s, i) => renderStreamTile(s, i, { machineIdentifier, confirmingSessionId, pausedAt, sessionCountByUser, topUser, confettiEnabled, compact: popoutTileCompact, stacked: popoutTileStacked }))}
+              </div>
+            )}
+          </div>
+          </div>
+          {!streamsPopoutFullscreen && (
+            <span className="popout-resize-handle" onMouseDown={startPopoutResize} title="Drag to resize">◢</span>
+          )}
+          {popoutAboutOpen && (
+            <div className="about-overlay" onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_POPOUT_ABOUT" })}>
+              <div className="about-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="about-modal-logo">
+                  <img className="streampulse-logo-text" src={isOnline ? STREAMPULSE_LOGO : STREAMPULSE_LOGO_OFFLINE} alt="" />
+                  <svg className="heartbeat-svg" viewBox="0 0 320 100" preserveAspectRatio="xMidYMid meet">
+                    {isOnline && <path className="heartbeat-trace" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                    {isOnline && <path className="heartbeat-pulse" d="M0,50 L38,50 L54,34 L64,50 L84,92 L112,8 L132,66 L146,50 L162,56 L178,50 L320,50" />}
+                    {!isOnline && <path className="heartbeat-flatline-trace" d="M0,50 L320,50" />}
+                    {!isOnline && <path className="heartbeat-flatline-pulse" d="M0,50 L320,50" />}
+                  </svg>
+                </div>
+                <div className="about-modal-row">Version {WIDGET_VERSION}</div>
+                <div className="about-modal-row">by Witchking86</div>
+                <div className="about-modal-row">
+                  <span className="about-modal-link" onClick={() => openExternal(`https://github.com/${STREAMPULSE_REPO}`)}>
+                    github.com/{STREAMPULSE_REPO}
+                  </span>
+                </div>
+                <div className="about-modal-row about-modal-license">MIT License</div>
+                <div className="about-modal-row">
+                  <span className="about-modal-link" onClick={() => dispatchRef && signOutOfPlex(dispatchRef)}>
+                    Sign out of Plex
+                  </span>
+                </div>
+                <span className="about-modal-close" onClick={() => dispatchRef && dispatchRef({ type: "TOGGLE_POPOUT_ABOUT" })}>Close</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+      {/* Rendered AFTER .widget-root (not alongside snow/leaves/rain
+          above .widget-root) so it paints ON TOP of every real dashboard
+          element -- Now Playing tiles, Recently Added posters, all of it
+          -- instead of behind them. Both are still position:absolute;
+          inset:0 siblings of .widget-root under the same display:contents
+          wrapper (see the big comment on that wrapper above), so this is
+          purely a paint-order change, not a layout one: .widget-root has
+          an explicit z-index (making it its own stacking context), and
+          with no z-index of its own .rain-layer simply paints after it in
+          that same "z-index 0" step -- on top, tree order deciding it.
+          Without this, a drop or splash crossing over a tile/poster was
+          optically hidden behind that opaque artwork even though the hit
+          -testing above (measureWeatherImpactSurfaces/weatherImpactYPx) was
+          already computing its position correctly -- the splash was
+          real, just painted underneath the very thing it was supposed to
+          be landing on. See the .widget-root-elevated class below for
+          the one place this needs correcting back the other way (the
+          Weather menu and streams popout, both z-indexed sky-high but
+          both still descendants of .widget-root, would otherwise end up
+          BEHIND rain too). This is frontDrops only -- its
+          other half (backDrops) already rendered above, behind
+          .widget-root, in .rain-layer-back -- see the comment there. */}
+      {rainEnabledDisplayed && (
+        <div className="rain-layer-front">
+          {raindrops.front}
+        </div>
+      )}
+      {/* Front halves of snow and leaves -- same reasoning as rain-layer-
+          front just above (paints on top of .widget-root's entire
+          subtree, tiles/posters included), completing the back/front
+          split started above .widget-root's own opening tag. */}
+      {snowEnabledDisplayed && (
+        <div className="snow-layer-front">
+          {snowflakes.front}
+        </div>
+      )}
+      {leavesEnabledDisplayed && (
+        <div className="leaves-layer-front">
+          {leaves.front}
+        </div>
+      )}
+      {/* Front half of Halloween -- bats/ghosts/pumpkins completing their
+          own back/front split (see halloween-layer-back above), plus
+          cats, which only ever render here (front-only, see renderCats)
+          since they're meant to visibly walk right across the stream
+          tiles and the widget's own floor, not pass behind them. */}
+      {halloweenEnabledDisplayed && (
+        <div className="halloween-layer-front">
+          {batsEnabled && bats.front}
+          {ghostsEnabled && ghosts.front}
+          {pumpkinsEnabled && pumpkins.front}
+          {catsEnabled && cats}
+        </div>
+      )}
+      {/* Front half of Christmas -- mistletoe/ornaments/gingerbread/stars
+          completing their own back/front split, plus Santa (a single
+          persistent element -- see renderSantaSleigh -- always mounted
+          here whenever Santa's own toggle is on, continuously looping
+          across the widget like a bat rather than being hidden/shown
+          around a one-shot event). All front-only -- Santa is meant to
+          sit visibly over the tiles/content, not pass behind them. */}
+      {christmasEnabledDisplayed && (
+        <div className="christmas-layer-front">
+          {mistletoeEnabled && mistletoe.front}
+          {ornamentsEnabled && ornaments.front}
+          {gingerbreadEnabled && gingerbread.front}
+          {starsEnabled && stars.front}
+          {santaEnabled && renderSantaSleigh()}
         </div>
       )}
     </div>
