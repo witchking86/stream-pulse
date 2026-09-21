@@ -136,14 +136,6 @@ system widget rather than the fast-refresh, fully interactive one.
    on; recently added and library counts refresh every 5 minutes. No
    restart needed when your server comes back online or a stream starts.
 
-7. **Sonarr (optional)** — open the widget file and fill in:
-   ```js
-   let SONARR_URL = "http://192.168.1.50:8989";
-   let SONARR_API_KEY = "YOUR_SONARR_API_KEY"; // Sonarr -> Settings -> General -> API Key
-   ```
-   Leave both blank (the default) and the Sonarr section just doesn't
-   show up.
-
 ### If it shows "Widget error" or won't sign in
 - Confirm `jq` is installed: run `jq --version` in Terminal.
 - If you set `PLEX_URL`/`PLEX_TOKEN` by hand, double check they're
